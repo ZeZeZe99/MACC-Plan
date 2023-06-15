@@ -22,7 +22,11 @@ class GridWorld:
         else:
             raise NotImplementedError
         self.set_goal()
-        self.set_shadow()
+        self.set_shadow(val=True)
+
+        # Dynamic heuristic
+        self.required_scaf_loc = set()
+        self.unlocked_loc = set()
 
         # Agent
         self.num = arg.num
@@ -76,28 +80,45 @@ class GridWorld:
         """Set goal map (2D)"""
         self.goal = np.array(self.goal_maps[self.map], dtype=np.int32)
         self.goal_total = self.goal.sum()
+        self.goal3d = np.zeros(self.world_shape3d, dtype=np.int32)
+        for h in range(self.h):
+            self.goal3d[h] = self.goal > h
 
-    def set_shadow(self):
-        """Find the shadow region of the goal map (3D)"""
-        shadow = np.zeros(self.world_shape3d, dtype=np.int32)
-        shadow_loc = set()
+    def set_shadow(self, val=False):
+        """
+        Find the shadow region of the goal map (3D)
+        Args:
+            val: True = calculate shadow value, False = only find shadow location
+        """
+        self.shadow = np.zeros(self.world_shape3d, dtype=np.int32)
+        self.shadow_val = np.zeros(self.world_shape3d, dtype=np.int32)
+        self.shadow_loc = set()
         for x in range(self.w):
             for y in range(self.w):
                 '''Cast shadow'''
-                self.cast_shadow(shadow, shadow_loc, self.goal[x, y] - 1, x, y)
-        self.shadow = shadow
-        self.shadow_loc = shadow_loc
+                # for z in range(1, self.goal[x, y]):
+                #     self.cast_shadow(z, x, y, val)
+                self.cast_shadow(self.goal[x, y] - 1, x, y, val)
+        '''Filter only scaffold blocks'''
+        self.scaf = self.shadow * (1 - self.goal3d)
+        '''Make a dictionary of shadow values for scaffold blocks'''
+        self.shadow_vald = dict()
+        for (h, x, y) in self.shadow_loc:
+            if self.scaf[h, x, y] == 1:
+                self.shadow_vald[(h, x, y)] = self.shadow_val[h, x, y]
 
-    def cast_shadow(self, shadow, shadow_loc, h, x, y):
+    def cast_shadow(self, h, x, y, val=False):
         if h < 0:
             return
-        if shadow[h, x, y] == 1:
+        if not val and self.shadow[h, x, y] == 1:
             return
-        shadow[h, x, y] = 1
-        shadow_loc.add((h, x, y))
+        elif val:
+            self.shadow_val[h, x, y] += 1
+        self.shadow[h, x, y] = 1
+        self.shadow_loc.add((h, x, y))
         for (x2, y2) in [(x, y), (x-1, y), (x+1, y), (x, y-1), (x, y+1)]:
             if (x2, y2) in self.valid_loc and (x2, y2) not in self.border_loc:
-                self.cast_shadow(shadow, shadow_loc, h-1, x2, y2)
+                self.cast_shadow(h-1, x2, y2, val)
 
     '''Validation'''
     def valid_action(self, height, mode=0, degree=0):

@@ -6,32 +6,129 @@ import cProfile
 import lego
 import config
 
+'''
+Valid degree:
+    0: all valid locations reachable
+    1: valid locations within shadow region
+Heuristic mode:
+    0: # of plan blocks not placed + # of scaffold blocks
+    1: # of plan blocks not placed + # of scaffold blocks scaled by shadow value
+    2: # of plan blocks not placed + # of scaffold blocks + 2 * # of required scaffold blocks not placed
+Order mode:
+    0: f -> h -> generation order
+    1: f -> h -> shadow value -> generation order
+    2: f -> h -> unlock number -> generation order
+'''
 valid_mode = 1
 valid_degree = 1
+heu_mode = 0
+order_mode = 0
 
 def heuristic(height, mode=0):
     """
-    Calculate heuristic value for a given height map
+    Calculate heuristic value for a given height map and a goal map
     Mode 0: # of plan blocks not placed + # of scaffold blocks
+    Mode 1: # of plan blocks not placed + # of scaffold blocks scaled by shadow value
+    Mode 2: # of plan blocks not placed + # of scaffold blocks + 2 * # of required scaffold blocks not placed
+    Notes:
+        Mode 1 and 2 only used for initial state
     """
     if mode == 0:
         return np.abs(height - env.goal).sum()
+    elif mode == 1:
+        return env.goal.sum()
+    elif mode == 2:
+        return env.goal.sum() + 2 * len(env.required_scaf_loc)
     else:
         raise NotImplementedError
 
-def push_node(open_list, node):
+def heuristic_diff(loc, h, add, mode=0):
+    """Calculate difference of heuristic value after adding or removing a block"""
+    if add:
+        scaffold = h + 1 > env.goal[loc[0], loc[1]]
+    else:
+        scaffold = h > env.goal[loc[0], loc[1]]
+
+    if mode == 0:
+        if add and scaffold:
+            return 1
+        elif add and not scaffold:
+            return -1
+        elif not add and scaffold:
+            return -1
+        else:
+            return 1
+    elif mode == 1:
+        if add and scaffold:
+            return 1/env.shadow_vald[(h, loc[0], loc[1])]
+        elif add and not scaffold:
+            return -1
+        elif not add and scaffold:
+            return - 1/env.shadow_vald[(h-1, loc[0], loc[1])]
+        else:
+            return 1
+    else:
+        raise NotImplementedError
+
+def scaf_val_diff(loc, h, add):
+    """
+    Calculate difference of scaffold value after adding or removing a block
+    scaffold value = 1 / shadow value
+    """
+    if add:
+        scaffold = h + 1 > env.goal[loc[0], loc[1]]
+    else:
+        scaffold = h > env.goal[loc[0], loc[1]]
+
+    if scaffold and add:
+        return 1/env.shadow_vald[(h, loc[0], loc[1])]
+    elif scaffold and not add:
+        return -1/env.shadow_vald[(h-1, loc[0], loc[1])]
+    else:
+        return 0
+
+def check_unlock(node):
+    """Check if the action taken by the node unlocks a new plan block"""
+    if node.unlock > 0:
+        unlock = (node.valid_goal - node.parent.valid_goal) > 0  # unlocked goal blocks
+        locs = np.transpose(np.nonzero(unlock))
+        for (x, y) in locs:
+            if (node.height[x, y], x, y) not in env.unlocked_loc:  # make sure the goal block is not unlocked before
+                env.unlocked_loc.add((node.height[x, y], x, y))
+                xs, ys = np.transpose(np.nonzero(node.height - node.parent.height))[0]
+                h = node.height[xs, ys] - 1
+                env.required_scaf_loc.add((h, xs, ys))
+                return h, xs, ys
+    return None
+
+def update_h_vals(loc, open_list):
+    """Update all h values in open list, after specifying a new required scaffold block"""
+    new_open_list = []
+    h, x, y = loc
+    for item in open_list:
+        node = item[-1]
+        if node.height[x, y] < h + 1:
+            node.h += 2
+            push_node(new_open_list, node, mode=order_mode)
+        else:
+            push_node(new_open_list, node, mode=order_mode)
+    return new_open_list
+
+def push_node(open_list, node, mode=0):
     """
     Push node to open list
-    Sort order: f (lower), h (lower), gen_id (lower)
+    Sort order (increasing):
+        Mode 0: f, h, gen_id
+        Mode 1: f, h, scaffold value, gen_id
+        Mode 2: f, h, - # unlock, gen_id
     """
-    heapq.heappush(open_list, (node.f, node.h, node.gen_id, node))
-
-def get_plan(node):
-    plan = []
-    while node is not None:
-        plan.append(node.height)
-        node = node.parent
-    return plan[::-1]
+    f = node.g + node.h
+    if mode == 0:
+        heapq.heappush(open_list, (f, node.h, node.gen_id, node))
+    elif mode == 1:
+        heapq.heappush(open_list, (f, node.h, node.scaf_val, node.gen_id, node))
+    elif mode == 2:
+        heapq.heappush(open_list, (f, node.h, -node.unlock, node.gen_id, node))
 
 def validate(height, new_height, loc, add):
     """
@@ -64,6 +161,14 @@ def validate(height, new_height, loc, add):
                 break
     return valid, new_valid
 
+def get_plan(node):
+    plan = []
+    while node is not None:
+        plan.append(node.height)
+        node = node.parent
+    print(f'Number of actions: {len(plan)-1}')
+    return plan[::-1]
+
 def a_star():
     """
     A* search
@@ -75,9 +180,9 @@ def a_star():
     open_list = []
     closed_list = dict()  # key: (height, g), value: Node
 
-    root = Node(None, env.height, 0, heuristic(env.height), 0)
-    root.valid = env.valid_action(root.height, mode=valid_mode, degree=valid_degree)
-    push_node(open_list, root)
+    valid = env.valid_action(env.height, mode=valid_mode, degree=valid_degree)
+    root = Node(None, env.height, valid, 0, heuristic(env.height, mode=heu_mode), 0)
+    push_node(open_list, root,  mode=order_mode)
     closed_list[root.height.tobytes()] = 0
     gen = expand = invalid = dup = dup2 = 0
 
@@ -93,6 +198,11 @@ def a_star():
         if np.array_equal(node.height, env.goal):
             print(f'Generated: {gen}, Expanded: {expand}, Invalid: {invalid}, Duplicate: {dup}, Duplicate2: {dup2}')
             return get_plan(node)
+
+        '''Dynamic heuristic: update'''
+        require_scaf = check_unlock(node)
+        if require_scaf:
+            open_list = update_h_vals(require_scaf, open_list)
 
         '''Search for child nodes'''
         if valid_mode == 0:
@@ -110,11 +220,10 @@ def a_star():
                     invalid += 1
                     continue
                 # Generate new node
-                new_h = heuristic(new_height)
+                new_h = heuristic(new_height, mode=heu_mode)
                 gen += 1
-                new_node = Node(node, new_height, new_g, new_h, gen)
-                new_node.valid = new_valid
-                push_node(open_list, new_node)
+                new_node = Node(node, new_height, new_valid, new_g, new_h, gen)
+                push_node(open_list, new_node, mode=order_mode)
                 closed_list[new_height_bytes] = new_g
         elif valid_mode == 1:
             for (x, y) in [(x, y) for x in range(env.w) for y in range(env.w)]:
@@ -136,23 +245,33 @@ def a_star():
                         invalid += 1
                         continue
                     # Generate new node
-                    new_h = heuristic(new_height)
                     gen += 1
-                    new_node = Node(node, new_height, new_g, new_h, gen)
-                    new_node.valid = new_valid
-                    push_node(open_list, new_node)
+                    new_h = node.h + heuristic_diff((x, y), node.height[x, y], add, mode=heu_mode)
+                    new_node = Node(node, new_height, new_valid, new_g, new_h, gen)
+                    # scaf_val = scaf_val_diff((x, y), node.height[x, y], add)
+                    # new_node.scaf_val = node.scaf_val + scaf_val
+                    # new_node.scaf_val = abs(scaf_val)
+                    push_node(open_list, new_node, mode=order_mode)
                     closed_list[new_height_bytes] = new_g
 
     raise ValueError('No solution found')
 
 class Node:
-    def __init__(self, parent, height, g_val, h_val, gen_id):
+    def __init__(self, parent, height, valid, g_val, h_val, gen_id):
         self.parent = parent
         self.height = height
+        self.valid = valid
         self.g = g_val
         self.h = h_val
-        self.f = self.g + self.h
         self.gen_id = gen_id
+
+        self.scaf_val = 0
+        self.valid_goal = (valid[1] * (env.goal > height))
+        if parent is None:
+            self.unlock = 0
+        else:
+            self.unlock = self.valid_goal.sum() - parent.valid_goal.sum()
+        # self.unlock = max(self.unlock, 0)
 
 
 if __name__ == '__main__':
