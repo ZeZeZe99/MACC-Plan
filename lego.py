@@ -22,14 +22,14 @@ class GridWorld:
         else:
             raise NotImplementedError
         self.set_goal()
-        self.set_shadow(val=True)
+        self.set_shadow(val=False)
 
         # Dynamic heuristic
         self.required_scaf_loc = set()
         self.unlocked_loc = set()
 
-        # Agent
-        self.num = arg.num
+        # Learning
+        self.cost = arg.cost
 
     def _set_world(self):
         """Set important properties of the world"""
@@ -78,7 +78,10 @@ class GridWorld:
     '''Goal related'''
     def set_goal(self):
         """Set goal map (2D)"""
-        self.goal = np.array(self.goal_maps[self.map], dtype=np.int32)
+        if self.map == -1:
+            self.goal = self.random_goal()
+        else:
+            self.goal = np.array(self.goal_maps[self.map], dtype=np.int32)
         self.goal_total = self.goal.sum()
         self.goal3d = np.zeros(self.world_shape3d, dtype=np.int32)
         for h in range(self.h):
@@ -214,7 +217,9 @@ class GridWorld:
         correct = np.clip(height, 0, self.goal).sum()
         todo = self.goal_total - correct
         scaffold = np.clip(height - self.goal, 0, self.h).sum()
-        return todo, scaffold
+        ratio = correct / self.goal_total
+        return {'total': self.goal_total, 'correct': correct, 'todo': todo, 'scaffold': scaffold, 'ratio': ratio,
+                'stage': self.stage}
 
     '''Execution'''
     def execute(self, height, loc, add):
@@ -226,3 +231,51 @@ class GridWorld:
             h -= 1
         height[x, y] = h
         return height
+
+    '''=====Learning====='''
+    def random_goal(self):
+        goal = np.random.randint(0, self.h, size=self.world_shape, dtype=np.int32)
+        goal *= (1 - self.border)
+        return goal
+
+    def reset(self):
+        self.set_goal()
+        self.set_shadow()
+        self.height = np.zeros(self.world_shape, dtype=np.int32)
+        self.stage = 0
+        return self.observe()
+
+    def observe(self):
+        return np.stack([self.height, self.goal], axis=0)
+
+    def built(self):
+        return (self.height >= self.goal).all()
+
+    def done(self):
+        return (self.height == self.goal).all()
+
+    def reward(self, add, x, y):
+        h = self.height[x, y] + (not add)  # height of the changed block
+        scaffold = h > self.goal[x, y]
+
+        r = -self.cost
+
+        if not scaffold:
+            if add:
+                r += 1
+            else:
+                r -= 1
+        elif self.stage == 1:  # Only consider scaffold in stage 1 (cleaning)
+            if add:  # Penalize adding scaffold
+                r -= 1
+            else:  # Reward removing scaffold
+                r += 1
+        return r
+
+    def step(self, action):
+        remove, a = divmod(action, self.w * self.w)
+        add = 1 - remove
+        x, y = divmod(a, self.w)
+        self.height = self.execute(self.height, (x, y), add)
+        self.stage = max(self.stage, self.built())  # Enter stage 1 if built (never go back)
+        return self.observe(), self.reward(add, x, y), self.done()
