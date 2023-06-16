@@ -39,7 +39,7 @@ def play():
     '''End of episode summary'''
     status = env.status(env.height)
     status['reward'] = epi_r
-    status['done'] = done
+    status['done'] = int(done)
     status['makespan'] = step
     return status, frames, policies
 
@@ -63,7 +63,7 @@ def test(count, commit):
         log_stat = dict()
         for key in stats[0].keys():
             log_stat[key] = sum([stat[key] for stat in stats]) / len(stats)
-        agent.logger.push_stat(count * arg.test_freq, log_stat, test=True, commit=commit)
+        agent.logger.push_stat(count, log_stat, test=True, commit=commit)
 
 def run():
     epi_count = 0
@@ -71,7 +71,7 @@ def run():
     while epi_count < arg.episode:
         # Test
         if epi_count % arg.test_freq == 0 and arg.test_epi > 0:
-            test(epi_count * arg.test_freq, commit=False)
+            test(epi_count, commit=False)
 
         # Train
         epi_count += 1

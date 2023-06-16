@@ -277,5 +277,5 @@ class GridWorld:
         add = 1 - remove
         x, y = divmod(a, self.w)
         self.height = self.execute(self.height, (x, y), add)
-        self.stage = max(self.stage, self.built())  # Enter stage 1 if built (never go back)
+        self.stage = max(self.stage, int(self.built()))  # Enter stage 1 if built (never go back)
         return self.observe(), self.reward(add, x, y), self.done()

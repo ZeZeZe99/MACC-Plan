@@ -36,11 +36,11 @@ class Logger:
         for key in self.loss_key + self.stat_key:
             self.data[key] = []
 
-    def log_loss(self, loss, value_loss, policy_loss, entropy):
-        self.data['loss'].append(loss)
-        self.data['value_loss'].append(value_loss)
-        self.data['policy_loss'].append(policy_loss)
-        self.data['entropy'].append(entropy)
+    def log_loss(self, loss, value_loss, policy_loss, entropy, step):
+        self.data['loss'].append(loss / step)
+        self.data['value_loss'].append(value_loss / step)
+        self.data['policy_loss'].append(policy_loss / step)
+        self.data['entropy'].append(entropy / step)
 
     def log_stat(self, reward):
         self.data['reward'].append(reward)

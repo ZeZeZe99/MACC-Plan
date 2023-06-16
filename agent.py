@@ -87,7 +87,7 @@ class A2C(Agent):
         loss = policy_loss + value_loss + entropy_loss
 
         # Log loss
-        self.logger.log_loss(loss, value_loss, policy_loss, entropy_loss)
+        self.logger.log_loss(loss, value_loss, policy_loss, entropy_loss, policy.shape[0])
         return loss
 
     def update(self):
