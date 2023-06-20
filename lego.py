@@ -351,7 +351,7 @@ class GridWorld:
 
         if not scaffold:  # Goal block
             if self.R > 0:
-                r = self.radiation[h, x, y]
+                r = self.radiation[h - 1, x, y]
             else:
                 r = 1
             reward += r if add else -r  # reward adding, penalize removing
