@@ -14,6 +14,7 @@ class Agent:
         '''Training'''
         self.gamma = arg.gamma
         self.entropy = arg.entropy
+        self.clip = arg.clip
 
         self.logger = Logger()
         self.buffer = Buffer(arg)
@@ -35,13 +36,12 @@ class A2C(Agent):
         super(A2C, self).__init__(arg, env)
 
         self.model = ACNet(arg).to(self.device)
+        if arg.load != '':
+            self.model.load_state_dict(torch.load(arg.load, map_location=self.device))
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=arg.lr)
 
     def bootstrap(self, next_ob, done):
-        if done:
-            next_value = 0
-        else:
-            next_value = self.model(next_ob)[1].detach()
+        next_value = self.model(next_ob)[1].detach() * (1 - done)
         return next_value
 
     def discount_cumsum(self, gamma, values):
@@ -94,6 +94,7 @@ class A2C(Agent):
         self.optimizer.zero_grad()
         loss = self.calculate_loss()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip)
         self.optimizer.step()
 
     def select_action(self, ob, valid):
@@ -107,6 +108,10 @@ class A2C(Agent):
             policy /= policy.sum()
             action = torch.multinomial(policy, num_samples=1).item()
         else:  # If policy is invalid, choose from valid action randomly
-            policy = mask / mask.sum()
-            action = np.random.choice(self.num_action, p=policy)
+            if mask.sum() > 0:
+                policy = mask / mask.sum()
+                action = np.random.choice(self.num_action, p=policy)
+            else:
+                action = -1
+                policy *= 0
         return action, policy

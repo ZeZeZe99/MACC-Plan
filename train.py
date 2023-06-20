@@ -1,13 +1,14 @@
 import os.path
-
+import cProfile
 import torch
 import wandb
+import pickle as pk
 
 import config
 import lego
 import agent
 
-def play():
+def play(train=True):
     """Play for an episode"""
     '''Initialize variables'''
     step = 0
@@ -19,6 +20,9 @@ def play():
     '''Reset environment and agent'''
     s = env.reset()
     agent.reset()
+    if arg.gif:
+        frames.append(s)
+        policies.append(None)
 
     '''Start the episode'''
     while not done and step < arg.epi_len:
@@ -26,15 +30,20 @@ def play():
         valid = valid_map[1:].reshape(-1)
         action, policy = agent.select_action(s, valid)
         s2, r, done = env.step(action)
-        agent.store_transition(s, action, r, s2, done, valid)
+        if train:
+            agent.store_transition(s, action, r, s2, int(done), valid)
         epi_r += r
         s = s2
         step += 1
 
         # Update network
-        if step % arg.train_step == 0 or done or step == arg.epi_len:
+        if train and (step % arg.train_step == 0 or done or step == arg.epi_len):
             agent.update()
             agent.buffer.reset()
+
+        if arg.gif:
+            frames.append(s2)
+            policies.append(policy.numpy())
 
     '''End of episode summary'''
     status = env.status(env.height)
@@ -52,18 +61,24 @@ def train(count):
         agent.logger.push_stat(count, stat, test=False, commit=True)
 
 def test(count, commit):
-    stats, frames, policies = [], [], []
+    stats, frames = [], []
     for _ in range(arg.test_epi):
-        stat, frame, policy = play()
+        stat, frame, policy = play(train=False)
         stats.append(stat)
-        frames.append(frame)
-        policies.append(policy)
+        if arg.gif:
+            frames.append((frame, policy))
+
+    log_stat = dict()
+    for key in stats[0].keys():
+        log_stat[key] = sum([stat[key] for stat in stats]) / len(stats)
+    print(f'Test episode {count}: done {log_stat["done"]}, makespan {log_stat["makespan"]}, reward {log_stat["reward"]},' 
+          f' completion ratio {log_stat["ratio"]}')
 
     if arg.wandb:
-        log_stat = dict()
-        for key in stats[0].keys():
-            log_stat[key] = sum([stat[key] for stat in stats]) / len(stats)
         agent.logger.push_stat(count, log_stat, test=True, commit=commit)
+    if arg.gif:
+        with open('frames.pkl', 'wb') as f:
+            pk.dump(frames, f)
 
 def run():
     epi_count = 0
@@ -72,6 +87,8 @@ def run():
         # Test
         if epi_count % arg.test_freq == 0 and arg.test_epi > 0:
             test(epi_count, commit=False)
+        if arg.test:
+            return
 
         # Train
         epi_count += 1
@@ -87,7 +104,7 @@ def run():
 
     # Final test
     if arg.test_epi > 0:
-        test(epi_count * arg.test_freq, commit=True)
+        test(epi_count, commit=True)
 
 
 if __name__ == '__main__':
@@ -95,8 +112,6 @@ if __name__ == '__main__':
     arg = config.process(arg)
     if torch.cuda.is_available():
         arg.device = torch.device('cuda')
-    # elif torch.backends.mps.is_available():
-    #     arg.device = torch.device('mps')
     else:
         arg.device = torch.device('cpu')
     print(f'Using device {arg.device}')
@@ -108,7 +123,9 @@ if __name__ == '__main__':
         config = dict(
             w=arg.w, h=arg.h, map=arg.map, cost=arg.cost,
             epi_len=arg.epi_len, train_step=arg.train_step,
-            lr=arg.lr, gamma=arg.gamma, clip=arg.clip, entropy=arg.entropy
+            lr=arg.lr, gamma=arg.gamma, clip=arg.clip, entropy=arg.entropy,
+
+            translate=arg.translate, radiation=arg.R, trap=arg.T,
         )
         wandb.init(entity='macc', project=arg.project, group=arg.group, name=arg.name, config=config)
         wandb.define_metric('train')
@@ -117,5 +134,6 @@ if __name__ == '__main__':
         wandb.define_metric('test/*', step_metric='test')
 
     run()
+    # cProfile.run('env.reset()', sort='tottime')
 
     print('Done!')

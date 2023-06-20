@@ -28,9 +28,9 @@ class ACNet(nn.Module):
             raise NotImplementedError
 
         '''FC layers'''
-        self.fc1 = nn.Linear(256, 256)
-        self.fc2 = nn.Linear(256, 256)
-        self.fc3 = nn.Linear(256, 256)
+        self.fc1 = nn.Linear(256, 512)
+        self.fc2 = nn.Linear(512, 512)
+        self.fc3 = nn.Linear(512, 256)
         relu += [self.fc1, self.fc2, self.fc3]
 
         '''A2C Network'''
@@ -64,5 +64,3 @@ class ACNet(nn.Module):
         value = self.value2(c)
 
         return logit, value
-
-
