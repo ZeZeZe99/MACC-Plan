@@ -8,8 +8,11 @@ def get_parser():
     parser.add_argument('--w', type=int, default=8, help='Width of the grid world')
     parser.add_argument('--map', type=int, default=0, help='Goal map')
     parser.add_argument('--num', type=int, default=1, help='Number of agents')
-    parser.add_argument('--cost', type=float, default=.1, help='Base cost of an action')
 
+    '''Animation'''
     parser.add_argument('--gif', action='store_true', help='Save gif of the episode')
+
+    '''Hierarchical planning'''
+    parser.add_argument('--start', type=int, default=0, help='Start stage in the pipeline')
 
     return parser
