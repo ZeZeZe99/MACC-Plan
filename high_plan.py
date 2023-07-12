@@ -1,7 +1,9 @@
 import heapq
 import numpy as np
+import pickle as pk
 from line_profiler import LineProfiler
 import cProfile
+import pstats
 
 import lego
 import config
@@ -22,7 +24,7 @@ valid_degree = 2
 heu_mode = 1
 order_mode = 0
 
-def heuristic(height, mode=0):
+def heuristic(env, height, mode=0):
     """
     Calculate heuristic value for a given height map and a goal map
     Mode 0: # of plan blocks not placed + # of scaffold blocks
@@ -42,7 +44,7 @@ def heuristic(height, mode=0):
     else:
         raise NotImplementedError
 
-def heuristic_diff(loc, h, add, mode=0):
+def heuristic_diff(env, loc, h, add, mode=0):
     """Calculate difference of heuristic value after adding or removing a block"""
     if add:
         scaffold = h + 1 > env.goal[loc[0], loc[1]]
@@ -73,24 +75,39 @@ def push_node(open_list, node, mode=0):
     else:
         raise NotImplementedError
 
-def validate(height, new_height, loc, add):
+def validate(env, new_height, x, y, add):
     """
     Validate a block action:
         must exist a neighbor location with correct height, and is reachable before and after the action
     """
     new_valid = env.valid_bfs_map(new_height, degree=valid_degree)
-    x, y = loc
-    h = height[x, y]
+    h = new_height[x, y] - 1 if add else new_height[x, y] + 1
     valid = False
-    for (x2, y2) in [(x-1, y), (x+1, y), (x, y-1), (x, y+1)]:
-        if (x2, y2) not in env.valid_loc:
-            continue
-        if add and height[x2, y2] == h and new_valid[0, x2, y2]:
+    for (x2, y2) in env.valid_neighbor[x, y]:
+        if add and new_height[x2, y2] == h and new_valid[0, x2, y2]:
             valid = True
             break
-        if not add and height[x2, y2] == h-1 and new_valid[0, x2, y2]:
+        if not add and new_height[x2, y2] == h-1 and new_valid[0, x2, y2]:
             valid = True
             break
+    return valid, new_valid
+
+def validate2(env, new_height, x, y, add, old_valid):
+    """
+    Validate a block action (incremental):
+        must exist a neighbor location with correct height, and is reachable before and after the action
+    """
+    valid, new_valid = env.update_valid_map(new_height, x, y, old_valid, degree=valid_degree)
+    if valid:
+        valid = False
+        h = new_height[x, y] - 1 if add else new_height[x, y] + 1
+        for (x2, y2) in env.valid_neighbor[x, y]:
+            if add and new_height[x2, y2] == h and new_valid[0, x2, y2]:
+                valid = True
+                break
+            if not add and new_height[x2, y2] == h - 1 and new_valid[0, x2, y2]:
+                valid = True
+                break
     return valid, new_valid
 
 def get_plan(node):
@@ -101,7 +118,18 @@ def get_plan(node):
     print(f'Number of actions: {len(plan)-1}')
     return plan[::-1]
 
-def a_star():
+def get_action(plan):
+    actions = []
+    for i in range(len(plan) - 1):
+        diff = plan[i+1] - plan[i]
+        x, y = np.argwhere(diff)[0]
+        h1, h2 = plan[i][x, y], plan[i+1][x, y]
+        add = h2 > h1
+        lv = min(h1, h2)
+        actions.append((int(add), x, y, lv))
+    return actions
+
+def high_lv_plan(env):
     """
     A* search
     Assumptions:
@@ -113,7 +141,7 @@ def a_star():
     closed_list = dict()  # key: (height, g), value: Node
 
     valid = env.valid_bfs_map(env.height, degree=valid_degree)
-    root = Node(None, env.height, valid, 0, heuristic(env.height, mode=heu_mode), 0)
+    root = Node(None, env.height, valid, 0, heuristic(env, env.height, mode=heu_mode), 0)
     push_node(open_list, root,  mode=order_mode)
     closed_list[root.height.tobytes()] = 0
     gen = expand = invalid = dup = dup2 = 0
@@ -129,7 +157,7 @@ def a_star():
         '''Completion check'''
         if np.array_equal(node.height, env.goal):
             print(f'Generated: {gen}, Expanded: {expand}, Invalid: {invalid}, Duplicate: {dup}, Duplicate2: {dup2}')
-            return get_plan(node)
+            return get_action(get_plan(node))
 
         '''Search for child nodes'''
         for a in range(1, 3):
@@ -153,14 +181,15 @@ def a_star():
                     dup += 1
                     continue
                 # Valid path detection: agent should have a way back
-                valid, new_valid = validate(node.height, new_height, (x, y), add)
+                # valid, new_valid = validate(env, new_height, x, y, add)
+                valid, new_valid = validate2(env, new_height, x, y, add, node.valid)
                 if not valid:
                     invalid += 1
                     continue
                 '''Generate child node'''
                 gen += 1
-                # new_h = node.h + heuristic_diff((x, y), node.height[x, y], add, mode=heu_mode)
-                new_h = heuristic(new_height, mode=heu_mode)
+                # new_h = node.h + heuristic_diff(env, (x, y), node.height[x, y], add, mode=heu_mode)
+                new_h = heuristic(env, new_height, mode=heu_mode)
                 new_node = Node(node, new_height, new_valid, new_g, new_h, gen)
                 # Mark added scaffold (can only add once)
                 # if valid_degree == 3 and add and new_height[x, y] > env.goal[x, y]:
@@ -188,15 +217,17 @@ if __name__ == '__main__':
     env = lego.GridWorld(arg)
 
     # lp = LineProfiler()
-    # lp_wrapper = lp(env.valid_bfs_set)
-    # lp_wrapper = lp(env.valid_bfs_map)
-    # lp_wrapper(env.height)
-    # lp_wrapper = lp(a_star)
-    # lp_wrapper()
+    # lp_wrapper = lp(high_lv_plan)
+    # lp_wrapper(env)
     # lp.print_stats()
 
-    cProfile.run('a_star()', sort='tottime')
+    profiler = cProfile.Profile()
+    profiler.enable()
+    plan = high_lv_plan(env)
+    profiler.disable()
+    stats = pstats.Stats(profiler).sort_stats('tottime')
+    stats.print_stats()
 
-    # plan = a_star()
-    # for step in plan:
-    #     print(step)
+    print(plan)
+    with open('high_plan.pkl', 'wb') as f:
+        pk.dump(plan, f)
