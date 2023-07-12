@@ -82,6 +82,11 @@ class GridWorld:
                     if (x2, y2) not in self.border_loc:
                         self.search_neighbor[(x, y)].add((x2, y2))
 
+        # Valid next locations (valid neighbor + current location)
+        self.valid_next_loc = self.valid_neighbor.copy()
+        for (x, y) in self.valid_neighbor:
+            self.valid_next_loc[(x, y)].add((x, y))
+
     '''Goal related'''
     def set_goal(self):
         """Set goal map (2D)"""
@@ -165,6 +170,82 @@ class GridWorld:
                     if degree == 0 or self.shadow[h, x, y] == 1:
                         addable[x, y] = 1
         return np.stack([reachable, addable, removable], axis=0)
+
+    def path_to_border(self, height, x, y):
+        """Check if there is a valid path from (x, y) to border, with DFS"""
+        queue = deque()
+        visited = set()
+        queue.append((x, y))
+        while len(queue) > 0:
+            x, y = queue.pop()
+            if self.border[x, y] == 1:
+                return True, None
+            if (x, y) not in visited:
+                visited.add((x, y))
+                h = height[x, y]
+                for (x2, y2) in self.valid_neighbor[(x, y)]:
+                    if (x2, y2) not in queue and abs(h - height[x2, y2]) <= 1:
+                        queue.append((x2, y2))
+        # If no path found, return all visited locations
+        return False, visited
+
+    def update_block(self, height, x, y, valid_map, degree):
+        """Update add / remove status at location (x, y)"""
+        h = height[x, y]
+        for (x2, y2) in self.valid_neighbor[(x, y)]:
+            h2 = height[x2, y2]
+            if h2 == h - 1:
+                valid_map[2, x, y] = 1
+            elif h2 == h:
+                if degree == 0 or self.shadow[h, x, y] == 1:
+                    valid_map[1, x, y] = 1
+
+    def update_valid_map(self, height, x, y, old_valid_map, degree):
+        """Incrementally update valid map after adding / removing block at (x, y)"""
+        if not self.path_to_border(height, x, y)[0]:  # No path back to border (invalid)
+            return False, None
+        valid_map = old_valid_map.copy()
+        reach = deque()
+        # Update add / remove of location (x, y) and its neighbors
+        h = height[x, y]
+        valid_map[1:, x, y] = 0
+        for (x2, y2) in self.valid_neighbor[(x, y)]:
+            h2 = height[x2, y2]
+            if abs(h - h2) > 1:  # Neighbor not reachable from (x, y)
+                if valid_map[0, x2, y2] == 1:  # Originally reachable, may become unreachable
+                    path, locations = self.path_to_border(height, x2, y2)
+                    if path:
+                        valid_map[1:, x2, y2] = 0
+                        self.update_block(height, x2, y2, valid_map, degree)
+                    else:
+                        for (x3, y3) in locations:
+                            valid_map[:, x3, y3] = 0
+            else:  # Neighbor reachable from (x, y)
+                if h2 == h - 1:
+                    valid_map[2, x, y] = 1
+                elif h2 == h:
+                    if degree == 0 or self.shadow[h, x, y] == 1:
+                        valid_map[1, x, y] = 1
+                if valid_map[0, x2, y2] == 0:
+                    reach.append((x2, y2))
+                else:
+                    valid_map[1:, x2, y2] = 0  # Originally unreachable, just become reachable
+                    self.update_block(height, x2, y2, valid_map, degree)
+
+        # Neighbors of (x, y) that become reachable
+        visited = set()
+        while len(reach) > 0:
+            x2, y2 = reach.popleft()
+            if (x2, y2) in visited:
+                continue
+            h2 = height[x2, y2]
+            valid_map[0, x2, y2] = 1  # Newly reachable
+            self.update_block(height, x2, y2, valid_map, degree)
+            for (x3, y3) in self.valid_neighbor[(x2, y2)]:
+                h3 = height[x3, y3]
+                if abs(h2 - h3) <= 1 and valid_map[0, x3, y3] == 0 and (x3, y3) not in reach:
+                    reach.append((x3, y3))
+        return True, valid_map
 
     '''Execution'''
     def execute(self, height, loc, add):
@@ -364,4 +445,3 @@ class GridWorld:
                 vg[x, y] = 1 / max(vcs)
             vgs[z] = vg
         return vgs
-
