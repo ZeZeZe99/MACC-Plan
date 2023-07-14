@@ -7,10 +7,12 @@ y0 = np.array([0, 1, 1, 0, 0, 1, 1, 0])
 z0 = np.array([0, 0, 0, 0, 1, 1, 1, 1])
 
 block_color = {
-    0: ['white', 0],           # air
-    1: ['yellow', 1],         # correct block
-    2: ['springgreen', .3],   # plan
-    3: ['red', .7],           # scaffolding
+    0: ['white', 0],         # air
+    1: ['cyan', .5],         # unplaced goal block
+    2: ['royalblue', 1],     # placed goal block
+    3: ['red', .7],          # scaffold block
+    4: ['black', 1],         # agent
+    5: ['darkgray', .7]      # carried block
 }
 
 def cube(x, y, z, block_type=0):
@@ -22,26 +24,15 @@ def init_world():
              for z in range(h) for x in range(w) for y in range(w)]
     return world
 
-def create_heatmap(data=None):
-    if data is None:
-        data = np.zeros((w, w))
-    else:
-        data = data.reshape((w, w)).round(decimals=2)
-    x = np.arange(w)
-    y = np.arange(w)
-    text = data.astype(str)
-    return go.Heatmap(x=x, y=y, z=data, text=text, colorscale='Blues', zmin=0, zmax=1, texttemplate='%{text}')
-
 def coord2id(z, x, y):
     return z * w * w + x * w + y
 
 def init_frame():
     world = init_world()
-    heatmap = create_heatmap()
-    traces = np.arange(w * w * h + 2).tolist()
-    return go.Frame(data=world + [heatmap, heatmap], traces=traces, name=f'frame {-1}')
+    traces = np.arange(w * w * h).tolist()
+    return go.Frame(data=world, traces=traces, name=f'frame {-1}')
 
-def update_frame(frame_id, new_map, new_pi, prev_frame, prev_map):
+def update_frame(frame_id, new_map, prev_frame, prev_map):
     diff = new_map != prev_map
     z, x, y = np.nonzero(diff)
     traces = list(prev_frame.traces).copy()
@@ -49,13 +40,6 @@ def update_frame(frame_id, new_map, new_pi, prev_frame, prev_map):
     for i in range(len(x)):
         idx = coord2id(z[i], x[i], y[i])
         world[idx] = cube(x[i], y[i], z[i], new_map[z[i], x[i], y[i]])
-    if new_pi is None:
-        world[-2] = create_heatmap()
-        world[-1] = create_heatmap()
-    else:
-        new_pi = new_pi.reshape(2, w, w)
-        world[-2] = create_heatmap(new_pi[0])
-        world[-1] = create_heatmap(new_pi[1])
     return go.Frame(data=world, traces=traces, name=f'frame {frame_id}')
 
 def convert3d(ob):
@@ -75,7 +59,6 @@ def update_layout(fig, length):
         # eye=dict(x=1, y=2.2, z=1)  # Plan only
         eye=dict(x=1, y=0.2, z=2.3)
     )
-
     updatemenus = [dict(
         buttons=[
             dict(
@@ -94,7 +77,6 @@ def update_layout(fig, length):
         showactive=False, type="buttons",
         x=0.1, xanchor="right", y=0.3, yanchor="top"
     )]
-
     sliders = [dict(
         steps=[
             dict(method='animate',
@@ -118,38 +100,83 @@ def update_layout(fig, length):
                           ),
         len=1.0  # slider length
     )]
-
     scene = dict(zaxis=dict(showticklabels=False))
-
     fig.update_layout(updatemenus=updatemenus, sliders=sliders, scene_camera=camera, scene=scene)
-    fig['layout']['yaxis']['autorange'] = "reversed"
-    fig['layout']['yaxis5']['autorange'] = "reversed"
-    fig['layout']['xaxis']['side'] = "top"
-    fig['layout']['xaxis5']['side'] = "top"
 
-def create_gif(episode):
-    maps, policies = episode
+def create_gif():
     fig = go.Figure(data=init_world())
-    fig.set_subplots(rows=3, cols=4)
-    fig.add_trace(create_heatmap(), row=1, col=1)
-    fig.add_trace(create_heatmap(), row=2, col=1)
     frames = [init_frame()]
     prev_map = np.zeros((h, w, w))
     for i in range(len(maps)):
-        new_map = convert3d(maps[i])
-        new_pi = policies[i]
-        frames.append(update_frame(i + 1, new_map, new_pi, frames[-1], prev_map))
+        new_map = maps[i]
+        frames.append(update_frame(i + 1, new_map, frames[-1], prev_map))
         prev_map = new_map
     fig.update(frames=frames)
     update_layout(fig, len(maps))
     fig.show()
 
+def convert_high_plan(goal, plan):
+    """Convert a high level plan to a sequence of frames"""
+    goal3d = np.zeros((h, w, w), dtype=np.int8)
+    for i in range(h):
+        goal3d[i] = goal > i
+    frames = np.tile(goal3d, (len(plan) + 1, 1, 1, 1))
+    for i in range(len(plan)):
+        add, x, y, lv = plan[i]
+        scaffold = 1 - goal3d[lv, x, y]
+        if add:
+            frames[i+1:, lv, x, y] += 1 + 2 * scaffold
+        else:
+            frames[i+1:, lv, x, y] -= 1 + 2 * scaffold
+    return frames
+
+def convert_path(goal, plan):
+    """Convert paths of multiple agents to a sequence of frames"""
+    goal3d = np.zeros((h, w, w), dtype=np.int8)
+    height = np.zeros((w, w), dtype=np.int8)
+    num = len(plan)
+    time = len(plan[0])
+    for i in range(h):
+        goal3d[i] = goal > i
+    frames = np.tile(goal3d, (time + 1, 1, 1, 1))
+    for t in range(time):
+        for i in range(num):
+            loc, carry, g = plan[i][t]
+            if len(loc) == 2:
+                x, y = loc
+                lv = height[x, y]
+            else:
+                x, y, lv = loc
+            frames[t+1, lv, x, y] = 4
+            if carry:
+                frames[t+1, lv+1, x, y] = 5
+            if g is not None:
+                add, gx, gy, glv = g
+                scaffold = 1 - goal3d[glv, gx, gy]
+                if add:
+                    frames[t+1:, glv, gx, gy] += 1 + 2 * scaffold
+                    height[gx, gy] += 1
+                else:
+                    frames[t+1:, glv, gx, gy] -= 1 + 2 * scaffold
+                    height[gx, gy] -= 1
+    return frames
+
 
 if __name__ == '__main__':
-    w = 8
-    h = 3
+    # high = True
+    high = False
+    if high:
+        with open('result/high_action.pkl', 'rb') as f:
+            goal, plan = pk.load(f)
+            h = np.max(goal)
+    else:
+        with open('result/path.pkl', 'rb') as f:
+            goal, plan = pk.load(f)
+            h = np.max(goal) + 2
 
-    with open('frames.pkl', 'rb') as f:
-        episodes = pk.load(f)
-    for episode in episodes:
-        create_gif(episode)
+    w = goal.shape[0]
+    if high:
+        maps = convert_high_plan(goal, plan)
+    else:
+        maps = convert_path(goal, plan)
+    create_gif()
