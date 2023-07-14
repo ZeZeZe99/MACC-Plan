@@ -1,4 +1,6 @@
 import pickle as pk
+import cProfile
+import pstats
 
 import lego
 import config
@@ -8,11 +10,11 @@ from cbs import cbs
 
 def task_allocation(todo, assignment):
     # Select candidate tasks
-    tasks = todo[:min(arg.num, len(todo))]
+    tasks = todo[:min(num, len(todo))]
     tasks, num_dummy = adjust_task(tasks)
     # Allocate tasks to agents
     i = 0
-    for a in range(arg.num):
+    for a in range(num):
         if assignment[a] is None:
             while tasks[i] in assignment:
                 i += 1
@@ -31,36 +33,41 @@ def adjust_task(tasks):
         if i not in delay:
             final_tasks.append(tasks[i])
     # Append dummy tasks if there are fewer tasks than agents
-    num_dummy = arg.num - len(final_tasks)
+    num_dummy = num - len(final_tasks)
     final_tasks += num_dummy * [(-1, -1, -1, -1)]
     return final_tasks, num_dummy
 
-def add_carry(path, carry):
+def snapshot(path, carry, goal):
+    """Convert (loc, action) to (loc, carry, goal)"""
     for i in range(len(path)):
-        if path[i][2] in ['depo', 'goal']:
+        if path[i][1] in ['depo', 'goal']:
             carry = not carry
-        path[i] = (path[i][0], path[i][1], path[i][2], carry)
+        if path[i][1] == 'goal':
+            g = goal
+        else:
+            g = None
+        path[i] = (path[i][0], carry, g)
     return path, carry
 
 def plan():
     finish, total = 0, len(high_path)
     todo = high_path.copy()
-    goals = [None for _ in range(arg.num)]
-    full_paths = [[] for _ in range(arg.num)]
+    goals = [None for _ in range(num)]
+    full_paths = [[(positions[i], carry_stats[i], None)] for i in range(num)]
     while finish < total:
         goals, num_dummy = task_allocation(todo, goals)
         paths, times = cbs(env, goals, positions, carry_stats)
         '''Determine execution length'''
-        if arg.num - num_dummy < len(todo):  # There are tasks not assigned
+        if num - num_dummy < len(todo):  # There are tasks not assigned
             execute_t = len(paths[0])  # Execute until the assigned first task is finished
             for t in times:
                 if t > 0:
                     execute_t = min(execute_t, t)
-            for i in range(arg.num):
-                executed = paths[i][:execute_t + 1]
-                executed, carry = add_carry(executed, carry_stats[i])
+            for i in range(num):
+                executed = paths[i][1:execute_t + 1]
+                executed, carry = snapshot(executed, carry_stats[i], goals[i])
                 full_paths[i] += executed
-                positions[i] = executed[-1][:2]
+                positions[i] = executed[-1][0]
                 carry_stats[i] = carry
                 if times[i] == execute_t:
                     finish += 1
@@ -71,9 +78,11 @@ def plan():
                         env.height[x, y] -= 1
                     todo.remove(goals[i])
                     goals[i] = None
+                elif times[i] == -1:
+                    goals[i] = None
         else:  # All tasks are assigned
-            for i in range(arg.num):
-                path, carry = add_carry(paths[i], carry_stats[i])
+            for i in range(num):
+                path, carry = snapshot(paths[i][1:], carry_stats[i], goals[i])
                 full_paths[i] += path
                 add, x, y, lv = goals[i]
                 if add == 0:
@@ -89,19 +98,30 @@ if __name__ == '__main__':
     arg = arg.parse_args()
 
     env = lego.GridWorld(arg)
-    positions = [(0, 1), (0, 2)]
-    carry_stats = [True, True]
-    # positions = [(0, 1), (0, 2), (0, 3)]
-    # carry_stats = [True, True, True]
+    positions = [(0, 1, 0), (2, 0, 0), (0, 4, 0)]
+    carry_stats = [True, True, True]
+    num = min(arg.num, len(positions))
+
+    profiler = cProfile.Profile()
+    profiler.enable()
 
     if arg.start == 0:
         high_path = high_lv_plan(env)
+        goal = env.goal
+        with open('result/high_action.pkl', 'wb') as f:
+            pk.dump([env.goal, plan], f)
     else:
-        with open('high_plan.pkl', 'rb') as f:
-            high_path = pk.load(f)
+        with open('result/high_action.pkl', 'rb') as f:
+            goal, high_path = pk.load(f)
     print(high_path)
 
     paths = plan()
 
-    # for p in paths:
-    #     print(p)
+    profiler.disable()
+    stats = pstats.Stats(profiler).sort_stats('tottime')
+    stats.print_stats()
+
+    # for t in range(len(paths[0])):
+    #     print(t, [paths[i][t] for i in range(num)])
+    with open('result/path.pkl', 'wb') as f:
+        pk.dump([goal, paths], f)

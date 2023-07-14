@@ -200,6 +200,7 @@ def high_lv_plan(env):
 
     raise ValueError('No solution found')
 
+
 class Node:
     def __init__(self, parent, height, valid, g_val, h_val, gen_id):
         self.parent = parent
@@ -208,7 +209,6 @@ class Node:
         self.g = g_val
         self.h = h_val
         self.gen_id = gen_id
-
 
 if __name__ == '__main__':
     arg = config.get_parser()
@@ -229,5 +229,5 @@ if __name__ == '__main__':
     stats.print_stats()
 
     print(plan)
-    with open('high_plan.pkl', 'wb') as f:
-        pk.dump(plan, f)
+    with open('result/high_action.pkl', 'wb') as f:
+        pk.dump([env.goal, plan], f)

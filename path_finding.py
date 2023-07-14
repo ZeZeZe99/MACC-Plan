@@ -1,12 +1,19 @@
 import heapq
-from copy import deepcopy
 
+"""
+Low level A* search for single agent path, in 3D space
 
-a_star_mode = 1  # 0: Multi-step A*, 1: Multi-label A*
+A* mode
+    0: Multi-step A* (greedily optimize each sub-path in order)
+    1: Multi-label A* (optimize the whole path)
+    2: Multi-label A* with fuel consumption (favor paths with less fuel consumption)
+"""
+
+a_star_mode = 2
 
 
 '''Goal processing'''
-def process_goal(goals, height, carry_stats):
+def process_goal(env, goals, carry_stats):
     """Process goal information"""
     # Add id to each goal
     for i, g in enumerate(goals):
@@ -38,74 +45,28 @@ def process_goal(goals, height, carry_stats):
     # Sort goals into the unique ordering: add low lv -> add high lv -> remove high lv -> remove low lv
     for loc in info['loc2goal']:
         info['loc2goal'][loc].sort(key=lambda g: (-g[0], g[0] * g[3], (g[0] - 1) * g[3]))
-    # Mapping from goal id to its order in the unique ordering
-    info['id2order'] = dict()
-    for g in goals:
-        if g[0] != -1:
-            loc = (g[1], g[2])
-            info['id2order'][g[4]] = info['loc2goal'][loc].index(g)
     # Mark possible heights for each x-y location
     info['loc2height'] = dict()
-    for loc in info['loc2goal']:
-        info['loc2height'][loc] = set()
-        for g in info['loc2goal'][loc]:
-            if g[0]:
-                info['loc2height'][loc].add(g[3] + 1)
-            else:
-                info['loc2height'][loc].add(g[3])
-            info['loc2height'][loc].add(height[loc[0], loc[1]])
+    for loc in env.valid_loc:
+        loc2height = set()
+        loc2height.add(env.height[loc[0], loc[1]])
+        if loc in info['loc2goal']:
+            for g in info['loc2goal'][loc]:
+                if g[0]:
+                    loc2height.add(g[3] + 1)
+                else:
+                    loc2height.add(g[3])
+        info['loc2height'][loc] = loc2height
     return info
 
 
 '''Action validation'''
-def movable(x1, y1, x2, y2, height):
-    """Valid to move from (x1, y1) to (x2, y2) iff height difference <= 1"""
-    # Should use next_height[x2, y2], but if there's a height change at (x2, y2), it'll cause a conflict, thus simplify
-    return abs(height[x1, y1] - height[x2, y2]) <= 1
-
-def init_movable(x1, y1, x2, y2, height, goal_info):
-    """At initial run, valid to move from (x1, y1) to (x2, y2) iff height difference <= 1 for any possible height"""
-    heights1 = goal_info['loc2height'][(x1, y1)] if (x1, y1) in goal_info['loc2height'] else [height[x1, y1]]
-    heights2 = goal_info['loc2height'][(x2, y2)] if (x2, y2) in goal_info['loc2height'] else [height[x2, y2]]
-    for h1 in heights1:
-        for h2 in heights2:
-            if abs(h1 - h2) <= 1:
-                return True
-    return False
-
-def goal_ready(height, goal, x, y, goal_info, init=False):
+def goal_ready(goal, x, y, z):
     """Check if the goal (block) action is ready to be performed"""
     add, gx, gy, lv, _ = goal
-    if not next_to_goal(x, y, gx, gy):  # Agent should be next to goal in x-y plane
+    if manhattan(x, y, gx, gy) != 1:  # Agent should be next to goal in x-y plane
         return False
-    if init:  # Initial run: only need to check if there exists a correct neighbor height
-        hs = goal_info['loc2height'][(x, y)] if (x, y) in goal_info['loc2height'] else [height[x, y]]
-        for h in hs:
-            if h == lv:
-                return True
-        return False
-    else:
-        h = height[x, y]
-        if h != lv:  # Height of agent location (neighbor to goal) should match goal level
-            return False
-        gh = height[gx, gy]
-        if (add and gh != lv) or (not add and gh != lv + 1):  # Height of goal location should match goal level
-            return False
-        return True
-
-def next_to_goal(x, y, gx, gy):
-    return abs(x - gx) + abs(y - gy) == 1
-
-def get_curr_height(t, t2hid, heights, heights_done, stage):
-    """Get height map at current time step"""
-    if t in t2hid:
-        hid = t2hid[t]
-    else:
-        hid = -1
-    if stage >= 2:
-        return heights_done[hid]
-    else:
-        return heights[hid]
+    return z == lv
 
 
 '''Heuristic'''
@@ -160,7 +121,9 @@ def filter_constraints(constraints, aid):
     max_step = 0
     for c in constraints:
         if c['agent'] == aid:
-            if c['type'] == 'edge2':  # Special edge constraint: all time steps starting from t
+            if c['type'] == 'lv-edge' and c['range']:
+                cons['range'].append(c)
+            elif c['type'] == 'lv-vertex' and c['range']:
                 cons['range'].append(c)
             else:
                 time = c['time']
@@ -172,116 +135,121 @@ def filter_constraints(constraints, aid):
     return cons, max_step
 
 def constrained(x1, y1, x2, y2, t, action, constraints):
-    """Check if the action is constrained"""
+    """Check if the action is constrained in 2D space"""
     if t in constraints:
         for c in constraints[t]:
             # Vertex constraint
             if c['type'] == 'vertex' and (x2, y2) == c['loc']:
                 return True
             # Edge constraint
-            if action == 'move' and c['type'] == 'edge' and (x1, y1, x2, y2) == c['loc']:
-                return True
+            if action == 'move':
+                if c['type'] == 'edge' and ((x1, y1), (x2, y2)) == c['loc']:
+                    return True
             # Block constraint
             if action == 'goal' and c['type'] == 'block':
                 return True
-            # Block-edge constraint
-            if action == 'goal' and c['type'] == 'block-edge' and (x1, y1) == c['loc']:
+    return False
+
+def constrained_3d(x2, y2, z2, t, constraints):
+    """Check if the action is constrained in 3D space"""
+    if t in constraints:
+        for c in constraints[t]:
+            if c['type'] == 'lv-vertex' and ((x2, y2), z2) == c['loc']:
                 return True
-    if action == 'move':  # Edge constraint 2
-        for c in constraints['range']:
-            if t >= c['time'] and (x1, y1, x2, y2) == c['loc']:
-                return True
+    for c in constraints['range']:
+        if t >= c['time'] and ((x2, y2), z2) == c['loc']:
+            return True
     return False
 
 def push_node(open_list, node):
     """
     Push a node to the open list
     A* mode
-        0: Multi-step A*, order = - stage, g + h, h, x, y
-        1: Multi-label A*, order = g + h, h, x, y, - stage
+        0: Multi-step A*, order = - stage, g + h, h, x, y, z
+        1: Multi-label A*, order = g + h, h, x, y, z, - stage
+        2: Multi-label A* + fuel consumption, order = g + h, h, fuel, x, y, z, - stage
      """
     if a_star_mode == 0:
-        heapq.heappush(open_list, (- node.stage, node.g + node.h, node.h, node.x, node.y, node))
+        heapq.heappush(open_list, (- node.stage, node.g + node.h, node.h, node.x, node.y, node.z, node))
+    elif a_star_mode == 1:
+        heapq.heappush(open_list, (node.g + node.h, node.h, node.x, node.y, node.z, - node.stage, node))
     else:
-        heapq.heappush(open_list, (node.g + node.h, node.h, node.x, node.y, - node.stage, node))
+        heapq.heappush(open_list, (node.g + node.h, node.h, node.fuel, node.x, node.y, node.z, - node.stage, node))
 
-def a_star(env, goal_info, locations, constraints, heights, t2hid, aid, limit=float('inf')):
+def a_star(env, goal_info, locations, constraints, aid, limit=float('inf')):
     """
-    A* search for a single-agent path: finish a goal + return to border
+    A* search for a single-agent path in 3D space: finish a goal + return to border
     Node stages:
-        0: move to border and interact with depo
+        0: move to border and interact with depo (if needed)
         1: finish goal
         2: move to border
     """
     goal = goal_info['goals'][aid]
     add, gx, gy, lv, _ = goal
-    ax, ay = locations[aid]
+    ax, ay, az = locations[aid]
     stage = goal_info['stage'][aid]
     cons, max_con_step = filter_constraints(constraints, aid)
 
-    # Get the height maps after the goal is finished
-    delta = 1 if add else -1
-    heights_done = deepcopy(heights)
-    for i in range(len(heights)):
-        heights_done[i][gx, gy] += delta
-
-    init_run = len(constraints) == 0
     open_list = []
     closed_list = set()
-    root = Node(None, 0, heuristic(env, stage, ax, ay, gx, gy), ax, ay, stage)
+    root = Node(None, 0, heuristic(env, stage, ax, ay, gx, gy), ax, ay, az, stage)
     push_node(open_list, root)
 
     while len(open_list) > 0:
         node = heapq.heappop(open_list)[-1]
-        x, y, stage, g = node.x, node.y, node.stage, node.g
+        x, y, z, stage, g = node.x, node.y, node.z, node.stage, node.g
 
         '''Completion check: at stage 2, at border, no further constraints'''
         if stage == 2 and (x, y) in env.border_loc and g >= max_con_step:
             return get_path(node)
 
         '''Expand node'''
-        height = get_curr_height(g, t2hid, heights, heights_done, stage)  # Height map at current time
         children = []
 
         '''Stage 0: try to interact with depo'''
-        if stage == 0 and (x, y) in env.border_loc:
+        if stage == 0 and (x, y) in env.border_loc and not constrained(x, y, x, y, g + 1, 'depo', cons):
             h_val = heuristic(env, 1, x, y, gx, gy)
-            child = Node(node, g + 1, h_val, x, y, 1, action='depo')
+            child = Node(node, g + 1, h_val, x, y, z, 1, action='depo')
             children.append(child)
 
         '''Stage 1: try to finish goal'''
-        if stage == 1 and goal_ready(height, goal, x, y, goal_info, init_run) \
-                and not constrained(x, y, gx, gy, g + 1, 'goal', cons):
+        if stage == 1 and goal_ready(goal, x, y, z) and not constrained(x, y, x, y, g + 1, 'goal', cons) \
+                and not constrained_3d(x, y, z, g + 1, cons):
             h_val = heuristic(env, 2, x, y, gx, gy)
-            child = Node(node, g + 1, h_val, x, y, 2, action='goal')
+            child = Node(node, g + 1, h_val, x, y, z, 2, action='goal')
             children.append(child)
 
         '''Move & stay actions'''
         for (x2, y2) in env.valid_next_loc[(x, y)]:
-            if init_run and not init_movable(x, y, x2, y2, height, goal_info):
-                continue
-            if not init_run and not movable(x, y, x2, y2, height):
-                continue
             if constrained(x, y, x2, y2, g + 1, 'move', cons):
                 continue
-            h_val = heuristic(env, stage, x2, y2, gx, gy)
-            child = Node(node, g + 1, h_val, x2, y2, stage)
-            children.append(child)
+            zs = goal_info['loc2height'][(x2, y2)]
+            for z2 in zs:
+                if x == x2 and y == y2 and z != z2:  # Skip vertical move
+                    continue
+                if abs(z - z2) > 1 or constrained_3d(x2, y2, z2, g + 1, cons):  # Skip move with height difference > 1
+                    continue
+                h_val = heuristic(env, stage, x2, y2, gx, gy)
+                child = Node(node, g + 1, h_val, x2, y2, z2, stage)
+                children.append(child)
 
-        '''Push children'''
+        '''Push children & duplicate detection'''
         for child in children:
-            key = (child.stage, child.x, child.y, child.g)
-            if key not in closed_list and child.g <= limit:
+            key = (child.stage, child.x, child.y, child.z, child.g)
+            if key not in closed_list and child.g <= limit:  # Trim nodes with g > limit
                 push_node(open_list, child)
                 closed_list.add(key)
     return None, None
 
 def get_path(node):
-    """Get a successful single-agent path to the goal, plus the time that goal is finished"""
+    """
+    Get a successful single-agent path to the goal, plus the time that goal is finished
+    Result node in path: ((x, y, z), action)
+    """
     path = []
     t, seen = 0, False
     while node:
-        path.append((node.x, node.y, node.action))
+        path.append(((node.x, node.y, node.z), node.action))
         if node.action == 'goal':
             seen = True
         if not seen:
@@ -293,11 +261,20 @@ def get_path(node):
 
 
 class Node:
-    def __init__(self, parent, g, h, x, y, stage, action='move'):
+    def __init__(self, parent, g, h, x, y, z, stage, action='move'):
         self.parent = parent
         self.g = g
         self.h = h
         self.x = x
         self.y = y
+        self.z = z
         self.stage = stage
         self.action = action
+
+        # Fuel consumption = 1 for each non-stay action
+        if parent:
+            self.fuel = parent.fuel
+            if x != parent.x or y != parent.y or action != 'move':
+                self.fuel += 1
+        else:
+            self.fuel = 0
