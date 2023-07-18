@@ -115,7 +115,6 @@ def get_plan(node):
     while node is not None:
         plan.append(node.height)
         node = node.parent
-    print(f'Number of actions: {len(plan)-1}')
     return plan[::-1]
 
 def get_action(plan):
@@ -228,6 +227,7 @@ if __name__ == '__main__':
     stats = pstats.Stats(profiler).sort_stats('tottime')
     stats.print_stats()
 
+    print(f'Number of actions: {len(plan)}')
     print(plan)
     with open('result/high_action.pkl', 'wb') as f:
         pk.dump([env.goal, plan], f)

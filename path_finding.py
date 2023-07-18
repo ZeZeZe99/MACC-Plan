@@ -1,16 +1,37 @@
 import heapq
+from collections import deque
+import numpy as np
 
 """
-Low level A* search for single agent path, in 3D space
+Low level A* search to plan a single agent path in 3D space to
+    1) finish goal
+    2) return to border (parking location)
 
 A* mode
-    0: Multi-step A* (greedily optimize each sub-path in order)
-    1: Multi-label A* (optimize the whole path)
-    2: Multi-label A* with fuel consumption (favor paths with less fuel consumption)
+    0: order = -stage, f, h 
+        Favors reaching later stages earlier, similar to multi-step A* with back-track
+        h = cost to goal of current stage
+    1: order = f, h
+        Favors finishing goal and returning to border earlier, similar to multi-label A*
+        h = cost to goal then back to border
+    2: order = f, h, h2g, (fuel)
+        Similar to 1, favors finishing goal earlier (2nd)
+        h = cost to goal then back to border, h2g = cost to goal
+    3: order = f, h2g, h, (fuel)
+        Favors finishing goal earlier, then favors returning to border earlier
+    4: order = f, collision, h, h2g, (fuel)
+        Favors fewer collisions (1st), returning to border earlier (2nd), finishing goal earlier (3rd)
+        collision = # collisions with existing paths
+    Extra: favors less fuel consumption (non-stay actions)
+
+Heuristic mode
+    0: Manhattan distance to goal of current stage
+    1: Distance to the end goal, under-estimate
+    2: Distance to the end goal, pre-computed
 """
 
-a_star_mode = 2
-
+a_star_mode = 3
+heuristic_mode = 2
 
 '''Goal processing'''
 def process_goal(env, goals, carry_stats):
@@ -43,21 +64,174 @@ def process_goal(env, goals, carry_stats):
         else:
             info['loc2goal'][loc] = [g]
     # Sort goals into the unique ordering: add low lv -> add high lv -> remove high lv -> remove low lv
+    # Assumption: only has (add low lv -> add high lv), or (remove high lv -> remove low lv)
     for loc in info['loc2goal']:
         info['loc2goal'][loc].sort(key=lambda g: (-g[0], g[0] * g[3], (g[0] - 1) * g[3]))
+    # Find the order of the goal in its location
+    info['goal2order'] = dict()
+    for g in goals:
+        if g[0] != -1:
+            info['goal2order'][g] = info['loc2goal'][(g[1], g[2])].index(g)
     # Mark possible heights for each x-y location
     info['loc2height'] = dict()
     for loc in env.valid_loc:
-        loc2height = set()
-        loc2height.add(env.height[loc[0], loc[1]])
+        loc2height = []
+        loc2height.append(env.height[loc[0], loc[1]])
         if loc in info['loc2goal']:
             for g in info['loc2goal'][loc]:
                 if g[0]:
-                    loc2height.add(g[3] + 1)
+                    loc2height.append(g[3] + 1)
                 else:
-                    loc2height.add(g[3])
+                    loc2height.append(g[3])
         info['loc2height'][loc] = loc2height
+    # Mark possible neighbors for each goal (where the agent can stand at while performing the goal action)
+    info['goal2neighbor'] = dict()
+    for _, gx, gy, lv, _ in goals:
+        if gx != -1:
+            info['goal2neighbor'][(gx, gy, lv)] = set()
+            for (nx, ny) in env.valid_neighbor[gx, gy]:
+                nzs = info['loc2height'][(nx, ny)]
+                if lv in nzs:
+                    info['goal2neighbor'][(gx, gy, lv)].add((nx, ny, lv))
     return info
+
+
+'''Heuristic'''
+def manhattan(x1, y1, x2, y2):
+    return abs(x1 - x2) + abs(y1 - y2)
+
+def distance2border(env, loc2height):
+    """Pre-compute the shortest distance to border for each 3D location"""
+    distance = dict()
+    open_list = deque()
+    for (x, y) in env.border_loc:
+        distance[(x, y, 0)] = 0
+        open_list.append((x, y, 0))
+    while open_list:
+        x, y, z = open_list.popleft()
+        d = distance[(x, y, z)]
+        for (nx, ny) in env.valid_neighbor[x, y]:
+            nzs = loc2height[nx, ny]
+            for nz in nzs:
+                if abs(nz - z) > 1:
+                    continue
+                if (nx, ny, nz) not in distance:
+                    distance[(nx, ny, nz)] = d + 1
+                    open_list.append((nx, ny, nz))
+    return distance
+
+def distance2neighbor(env, loc2height, goal2neighbor):
+    """
+    Pre-compute the shortest distance to neighbor of each goal via depo
+    Mirror map is a "+" shape map, with the original map at the center, and its flip versions along 4 edges
+    Distance from a location to a neighbor via left depo = distance from its left mirror to the neighbor
+    """
+    w = env.w
+    d2neighbor = dict()
+    for g, nbs in goal2neighbor.items():
+        gx, gy, lv = g
+        for (nx, ny, nz) in nbs:
+            if (nx, ny, lv) in d2neighbor:
+                continue
+            distance = dict()
+            distance[(nx + w, ny + w, lv)] = 0
+            open_list = deque()
+            open_list.append((nx + w, ny + w, lv))
+            while open_list:
+                x, y, z = open_list.popleft()
+                d = distance[(x, y, z)]
+                for (x2, y2) in env.mirror_neighbor[x, y]:
+                    zs = loc2height[env.mirror2origin[(x2, y2)]]
+                    for z2 in zs:
+                        if abs(z2 - z) > 1:
+                            continue
+                        if (x2, y2, z2) not in distance:
+                            distance[(x2, y2, z2)] = d + 1
+                            open_list.append((x2, y2, z2))
+            d2neighbor[(nx, ny, lv)] = distance
+    return d2neighbor
+
+def heuristic(env, goal_info, stage, x, y, z, gx, gy, lv):
+    """
+    Heuristic function to estimate cost to goal
+    Heuristic mode
+        0: distance to current stage goal
+        1: distance to end goal (border)
+        2: use distance to end goal (border), pre-compute
+    Return (h_val, h_val to goal action)
+    """
+    w1 = w2 = env.w
+    if heuristic_mode == 0:
+        if stage == 0:  # Distance to depo
+            return min(x, w1 - x - 1, y, w2 - y - 1) + 1, 0
+        elif stage == 1:  # Distance to goal location
+            if x != gx or y != gy:
+                return manhattan(x, y, gx, gy), 0
+            else:
+                return 2, 0
+        else:  # Distance to border
+            return min(x, w1 - x - 1, y, w2 - y - 1), 0
+    elif heuristic_mode == 1:
+        if stage == 0:  # Distance to depo to goal to border
+            h = 999
+            hg = 0
+            for (nx, ny) in env.valid_neighbor[gx, gy]:  # Will move to a neighbor of goal
+                d2 = min(nx, w1 - nx - 1, ny, w2 - ny - 1)  # Distance from this neighbor to border
+                # Distance to a depo + distance to neighbor + 'depo' and 'goal' actions
+                d1 = manhattan(x, y, nx, ny) + 2 * min(x, nx, y, ny, w1 - x - 1, d2) + 2
+                d = d1 + d2
+                if d < h:
+                    h = d
+                    hg = d1
+        elif stage == 1:  # Distance to goal to depo
+            h = 999
+            hg = 0
+            for (nx, ny) in env.valid_neighbor[gx, gy]:
+                d1 = manhattan(x, y, nx, ny) + 1
+                d2 = min(nx, w1 - nx - 1, ny, w2 - ny - 1)
+                d = d1 + d2
+                if d < h:
+                    h = d
+                    hg = d1
+        else:  # Distance to border
+            h = min(x, w1 - x - 1, y, w2 - y - 1)
+            hg = 0
+        return h, hg
+    elif heuristic_mode == 2:
+        if stage == 0:  # Distance to depo to goal to border
+            h = 1000
+            hg = 0
+            for (nx, ny, nz) in goal_info['goal2neighbor'][(gx, gy, lv)]:
+                d2nbr = goal_info['d2neighbor'].get((nx, ny, nz))
+                if d2nbr is None:
+                    continue
+                d1 = 1000
+                for (mx, my) in env.origin2mirror[(x, y)]:  # Distance to neighbor via a depo
+                    d1 = min(d1, d2nbr.get((mx, my, z), 1000))
+                d2 = goal_info['d2border'].get((nx, ny, nz), 1000)
+                d = d1 + 1 + d2
+                if d < h:
+                    h = d
+                    hg = d1 + 1
+        elif stage == 1:  # Distance to goal to depo
+            h = 1000
+            hg = 0
+            for (nx, ny, nz) in goal_info['goal2neighbor'][(gx, gy, lv)]:
+                d2nbr = goal_info['d2neighbor'].get((nx, ny, nz))
+                if d2nbr is None:
+                    continue
+                d1 = d2nbr.get((x + w1, y + w2, z), 1000)  # d to neighbor directly
+                d2 = goal_info['d2border'].get((nx, ny, nz), 1000)
+                d = d1 + 1 + d2
+                if d < h:
+                    h = d
+                    hg = d1 + 1
+        else:  # Distance to border
+            h = goal_info['d2border'].get((x, y, z), 1000)
+            hg = 0
+        return h, hg
+    else:
+        raise NotImplementedError
 
 
 '''Action validation'''
@@ -69,64 +243,18 @@ def goal_ready(goal, x, y, z):
     return z == lv
 
 
-'''Heuristic'''
-def manhattan(x1, y1, x2, y2):
-    return abs(x1 - x2) + abs(y1 - y2)
-
-def heuristic(env, stage, x, y, gx, gy):
-    """
-    Heuristic function to estimate cost to goal
-    A* mode
-        0: Multi-step A*, use distance to current stage goal
-        1: Multi-label A*, use distance to end goal
-    """
-    w1 = w2 = env.w
-    if a_star_mode == 0:
-        if stage == 0:  # Distance to depo
-            return min(x, w1 - x - 1, y, w2 - y - 1) + 1
-        elif stage == 1:  # Distance to goal location
-            if x != gx or y != gy:
-                return manhattan(x, y, gx, gy)
-            else:
-                return 2
-        else:  # Distance to border
-            return min(x, w1 - x - 1, y, w2 - y - 1)
-    else:
-        if stage == 0:  # Distance to depo to goal to border
-            d = 999
-            for (nx, ny) in env.valid_neighbor[gx, gy]:  # Will move to a neighbor of goal
-                dt = x + 1 + abs(y - ny) + nx  # Via top depo
-                dl = y + 1 + abs(x - nx) + ny  # Via left depo
-                db = w1 - x + abs(y - ny) + w1 - nx - 1
-                dr = w2 - y + abs(x - nx) + w2 - ny - 1
-                d2 = min(nx, w1 - nx - 1, ny, w2 - ny - 1)  # Distance from this neighbor to border
-                d = min(d, min(dt, dl, db, dr) + d2)
-            return d
-        elif stage == 1:  # Distance to goal to depo
-            d = 999
-            for (nx, ny) in env.valid_neighbor[gx, gy]:
-                d1 = manhattan(x, y, nx, ny) + 1
-                d2 = min(nx, w1 - nx - 1, ny, w2 - ny - 1)
-                d = min(d, d1 + d2)
-            return d
-        else:  # Distance to depo
-            return min(x, w1 - x - 1, y, w2 - y - 1)
-
-
 '''Single agent path finding'''
 def filter_constraints(constraints, aid):
-    """Filter constraints for a single agent by time"""
+    """Filter constraints for a single agent by time. Constraint = (type, agent, time, loc, range)"""
     cons = dict()
     cons['range'] = []
     max_step = 0
     for c in constraints:
-        if c['agent'] == aid:
-            if c['type'] == 'lv-edge' and c['range']:
-                cons['range'].append(c)
-            elif c['type'] == 'lv-vertex' and c['range']:
+        if c[1] == aid:
+            if c[0] == 'lv-vertex' and c[4]:
                 cons['range'].append(c)
             else:
-                time = c['time']
+                time = c[2]
                 if time not in cons:
                     cons[time] = [c]
                 elif c not in cons[time]:
@@ -135,48 +263,130 @@ def filter_constraints(constraints, aid):
     return cons, max_step
 
 def constrained(x1, y1, x2, y2, t, action, constraints):
-    """Check if the action is constrained in 2D space"""
+    """Check if the action is constrained in 2D space. Constraint = (type, agent, time, loc, range)"""
     if t in constraints:
         for c in constraints[t]:
             # Vertex constraint
-            if c['type'] == 'vertex' and (x2, y2) == c['loc']:
+            if c[0] == 'vertex' and (x2, y2) == c[3]:
                 return True
             # Edge constraint
             if action == 'move':
-                if c['type'] == 'edge' and ((x1, y1), (x2, y2)) == c['loc']:
+                if c[0] == 'edge' and ((x1, y1), (x2, y2)) == c[3]:
                     return True
             # Block constraint
-            if action == 'goal' and c['type'] == 'block':
+            if action == 'goal' and c[0] == 'block':
                 return True
     return False
 
 def constrained_3d(x2, y2, z2, t, constraints):
-    """Check if the action is constrained in 3D space"""
+    """Check if the action is constrained in 3D space. Constraint = (type, agent, time, loc, range)"""
     if t in constraints:
         for c in constraints[t]:
-            if c['type'] == 'lv-vertex' and ((x2, y2), z2) == c['loc']:
+            if c[0] == 'lv-vertex' and ((x2, y2), z2) == c[3]:
                 return True
     for c in constraints['range']:
-        if t >= c['time'] and ((x2, y2), z2) == c['loc']:
+        if t >= c[2] and ((x2, y2), z2) == c[3]:
             return True
     return False
+
+def construct_heights(height, block_actions, goal_info=None, ignore=None):
+    """
+    Construct the height map sequence from block actions, plus a mapping from t to height map id, for conflict detection
+    Block action: (t, (add, x, y, lv, gid))
+    Assume block action at t will change the map at t+1
+    Assume goal actions at the same x-y location are performed in order
+    When ignore is not None, ignore the specified goal action, but consider its effect when its next goal is performed
+    """
+    ignore_g = next_g = None
+    offset = 0
+    if ignore is not None and block_actions[ignore][0] >= 0:
+        ignore_g = block_actions[ignore][1]
+        gs = goal_info['loc2goal'][ignore_g[1:3]]
+        order = goal_info['goal2order'][ignore_g]
+        if order != len(gs) - 1:
+            offset = 1 if ignore_g[0] == 1 else -1
+            next_g = gs[order + 1]
+
+    block_actions = block_actions.copy()
+    block_actions.sort()  # Sort by time
+    unique = set([b[0] for b in block_actions])  # Unique time steps
+    unique.discard(-1)  # Ignore dummy action
+    heights = np.tile(height, (len(unique) + 1, 1, 1))  # Height map sequence, include initial one
+    t2hid = {0: 0}
+    prev_t, hid = 0, 0
+
+    for t, g in block_actions:  # t will always start above 0
+        add, x, y, lv, _ = g
+        if ignore_g == g:
+            continue
+        else:
+            if t < 0:  # Skip dummy actions
+                continue
+            if t > prev_t:
+                hid += 1
+            delta = 1 if add else -1
+            if next_g == g:
+                delta += offset
+            heights[hid:, x, y] += delta
+        # Update mapping from t to height map id
+        if t != prev_t:
+            for i in range(prev_t, t):
+                t2hid[i + 1] = hid - 1
+            t2hid[t + 1] = hid
+        prev_t = t
+    return heights, t2hid
+
+def count_collisions(node, aid, paths, heights, t2hid, block_actions):
+    """Count the number of collisions with other paths"""
+    collision = 0
+    time = node.g
+    if time >= len(paths[0]):
+        time = len(paths[0]) - 1
+    height = heights[t2hid[time]] if time in t2hid else heights[-1]
+    x, y, z = node.x, node.y, node.z
+    px, py = node.parent.x, node.parent.y
+    for i in range(len(paths)):
+        if i == aid:
+            continue
+        x2, y2, z2 = paths[i][time][0]
+        px2, py2, _ = paths[i][time - 1][0]
+        if x == x2 and y == y2:
+            collision += 1
+        if x == px2 and y == py2 and px == x2 and py == y2:
+            collision += 1
+        t, (_, gx, gy, _, _) = block_actions[i]
+        if t == time and ((x, y) == (gx, gy) or (px, py) == (gx, gy)):
+            collision += 1
+        if z != height[x, y]:
+            collision += 1
+    return collision
 
 def push_node(open_list, node):
     """
     Push a node to the open list
     A* mode
-        0: Multi-step A*, order = - stage, g + h, h, x, y, z
-        1: Multi-label A*, order = g + h, h, x, y, z, - stage
-        2: Multi-label A* + fuel consumption, order = g + h, h, fuel, x, y, z, - stage
+        0: order = - stage, g + h, h
+        1: order = g + h, h
+        2: order = g + h, h, h2g, fuel
+        3: order = g + h, h2g, h, fuel
+        4: order = g + h, collision, h, h2g, fuel
      """
+    g, h, x, y, z, stage = node.g, node.h, node.x, node.y, node.z, node.stage
+    h2g, collision, fuel = node.h2g, node.collision, node.fuel
     if a_star_mode == 0:
-        heapq.heappush(open_list, (- node.stage, node.g + node.h, node.h, node.x, node.y, node.z, node))
+        heapq.heappush(open_list, (- stage, g + h, h, x, y, z, node))
     elif a_star_mode == 1:
-        heapq.heappush(open_list, (node.g + node.h, node.h, node.x, node.y, node.z, - node.stage, node))
+        heapq.heappush(open_list, (g + h, h, x, y, z, node))
+    elif a_star_mode == 2:
+        heapq.heappush(open_list, (g + h, h, h2g, fuel, x, y, z, node))
+    elif a_star_mode == 3:
+        heapq.heappush(open_list, (g + h, h2g, h, fuel, x, y, z, node))
+    elif a_star_mode == 4:
+        heapq.heappush(open_list, (g + h, collision, h, h2g, fuel, x, y, z, node))
     else:
-        heapq.heappush(open_list, (node.g + node.h, node.h, node.fuel, node.x, node.y, node.z, - node.stage, node))
+        raise NotImplementedError
 
-def a_star(env, goal_info, locations, constraints, aid, limit=float('inf')):
+def a_star(env, goal_info, locations, constraints, aid, limit=float('inf'), paths=None, block_actions=None):
     """
     A* search for a single-agent path in 3D space: finish a goal + return to border
     Node stages:
@@ -190,9 +400,15 @@ def a_star(env, goal_info, locations, constraints, aid, limit=float('inf')):
     stage = goal_info['stage'][aid]
     cons, max_con_step = filter_constraints(constraints, aid)
 
+    if paths is not None and a_star_mode == 4:
+        heights, t2hid = construct_heights(env.height, block_actions, goal_info, ignore=aid)
+    else:
+        heights, t2hid = None, None
+
     open_list = []
-    closed_list = set()
-    root = Node(None, 0, heuristic(env, stage, ax, ay, gx, gy), ax, ay, az, stage)
+    closed_list = dict()
+    h_val, h2g = heuristic(env, goal_info, stage, ax, ay, az, gx, gy, lv)
+    root = Node(None, 0, h_val, h2g, ax, ay, az, stage)
     push_node(open_list, root)
 
     while len(open_list) > 0:
@@ -208,15 +424,15 @@ def a_star(env, goal_info, locations, constraints, aid, limit=float('inf')):
 
         '''Stage 0: try to interact with depo'''
         if stage == 0 and (x, y) in env.border_loc and not constrained(x, y, x, y, g + 1, 'depo', cons):
-            h_val = heuristic(env, 1, x, y, gx, gy)
-            child = Node(node, g + 1, h_val, x, y, z, 1, action='depo')
+            h_val, h2g = heuristic(env, goal_info, 1, x, y, z, gx, gy, lv)
+            child = Node(node, g + 1, h_val, h2g, x, y, z, 1, action='depo')
             children.append(child)
 
         '''Stage 1: try to finish goal'''
         if stage == 1 and goal_ready(goal, x, y, z) and not constrained(x, y, x, y, g + 1, 'goal', cons) \
                 and not constrained_3d(x, y, z, g + 1, cons):
-            h_val = heuristic(env, 2, x, y, gx, gy)
-            child = Node(node, g + 1, h_val, x, y, z, 2, action='goal')
+            h_val, h2g = heuristic(env, goal_info, 2, x, y, z, gx, gy, lv)
+            child = Node(node, g + 1, h_val, h2g, x, y, z, 2, action='goal')
             children.append(child)
 
         '''Move & stay actions'''
@@ -229,16 +445,28 @@ def a_star(env, goal_info, locations, constraints, aid, limit=float('inf')):
                     continue
                 if abs(z - z2) > 1 or constrained_3d(x2, y2, z2, g + 1, cons):  # Skip move with height difference > 1
                     continue
-                h_val = heuristic(env, stage, x2, y2, gx, gy)
-                child = Node(node, g + 1, h_val, x2, y2, z2, stage)
+                # Skip level inaccessible based on own goal action, assume no 2 goals for the same block
+                if x2 == gx and y2 == gy:
+                    if stage == 2 and ((add and z2 <= lv) or (not add and z2 >= lv + 1)):
+                        continue
+                    if stage != 2 and ((add and z2 >= lv + 1) or (not add and z2 <= lv)):
+                        continue
+                h_val, h2g = heuristic(env, goal_info, stage, x2, y2, z2, gx, gy, lv)
+                child = Node(node, g + 1, h_val, h2g, x2, y2, z2, stage)
                 children.append(child)
 
         '''Push children & duplicate detection'''
         for child in children:
-            key = (child.stage, child.x, child.y, child.z, child.g)
-            if key not in closed_list and child.g <= limit:  # Trim nodes with g > limit
-                push_node(open_list, child)
-                closed_list.add(key)
+            if child.g <= limit:  # Trim nodes with g > limit
+                if paths is not None and a_star_mode == 4:
+                    child.collision += count_collisions(child, aid, paths, heights, t2hid, block_actions)
+                key = (child.stage, child.x, child.y, child.z, child.g)
+                val = (child.collision, child.fuel)
+                # New node, fewer collisions, or less fuel
+                if key not in closed_list or closed_list[key] > val:
+                    push_node(open_list, child)
+                    closed_list[key] = val
+
     return None, None
 
 def get_path(node):
@@ -261,20 +489,23 @@ def get_path(node):
 
 
 class Node:
-    def __init__(self, parent, g, h, x, y, z, stage, action='move'):
+    def __init__(self, parent, g, h, h2g, x, y, z, stage, action='move'):
         self.parent = parent
         self.g = g
         self.h = h
+        self.h2g = h2g
         self.x = x
         self.y = y
         self.z = z
         self.stage = stage
         self.action = action
 
-        # Fuel consumption = 1 for each non-stay action
         if parent:
+            self.collision = parent.collision
+            # Fuel consumption = 1 for each non-stay action
             self.fuel = parent.fuel
             if x != parent.x or y != parent.y or action != 'move':
                 self.fuel += 1
         else:
+            self.collision = 0
             self.fuel = 0

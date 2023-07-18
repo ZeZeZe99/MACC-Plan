@@ -4,7 +4,7 @@ from copy import deepcopy
 import cProfile
 import pstats
 
-from cbs.path_finding import process_goal, a_star
+from path_finding import process_goal, a_star
 import lego
 import config
 

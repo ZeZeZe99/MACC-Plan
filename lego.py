@@ -1,6 +1,7 @@
 from collections import deque
 import numpy as np
 import goal
+from copy import deepcopy
 
 """
 Variables:
@@ -31,9 +32,12 @@ class GridWorld:
         self.set_goal()
         self.set_shadow()
 
-        # Heuristic
+        # High level plan heuristic
         self.set_distance_map()
         self.set_support_map()
+
+        # Low level search heuristic
+        self.set_mirror_map()
 
     '''Initialization'''
     def _set_world(self):
@@ -83,7 +87,7 @@ class GridWorld:
                         self.search_neighbor[(x, y)].add((x2, y2))
 
         # Valid next locations (valid neighbor + current location)
-        self.valid_next_loc = self.valid_neighbor.copy()
+        self.valid_next_loc = deepcopy(self.valid_neighbor)
         for (x, y) in self.valid_neighbor:
             self.valid_next_loc[(x, y)].add((x, y))
 
@@ -445,3 +449,30 @@ class GridWorld:
                 vg[x, y] = 1 / max(vcs)
             vgs[z] = vg
         return vgs
+
+    '''Low level search functions'''
+    def set_mirror_map(self):
+        """Create a series of mirror maps (original map with its flip over 4 borders)"""
+        w = self.w
+        mirror_map = np.zeros((3 * w, 3 * w), dtype=np.int8)
+        mirror_map[:, w:2 * w] = 1
+        mirror_map[w:2 * w, :] = 1
+        self.mirror_neighbor = dict()
+        for (x, y) in np.transpose(np.nonzero(mirror_map)):
+            self.mirror_neighbor[(x, y)] = set()
+            for (x2, y2) in [(x, y-1), (x, y+1), (x-1, y), (x+1, y)]:
+                if x2 < 0 or x2 >= 3 * w or y2 < 0 or y2 >= 3 * w:
+                    continue
+                if mirror_map[x2, y2] == 0:
+                    continue
+                self.mirror_neighbor[(x, y)].add((x2, y2))
+        self.origin2mirror = dict()
+        self.mirror2origin = dict()
+        for (x, y) in self.valid_loc:
+            self.origin2mirror[(x, y)] = [(w - x - 1, y + w), (x + w, w - y - 1),
+                                          (3 * w - x - 1, y + w), (x + w, 3 * w - y - 1)]
+            self.mirror2origin[(w - x - 1, y + w)] = (x, y)
+            self.mirror2origin[(x + w, w - y - 1)] = (x, y)
+            self.mirror2origin[(3 * w - x - 1, y + w)] = (x, y)
+            self.mirror2origin[(x + w, 3 * w - y - 1)] = (x, y)
+            self.mirror2origin[(x + w, y + w)] = (x, y)
