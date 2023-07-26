@@ -80,6 +80,23 @@ def push_node(open_list, node, mode=0):
     else:
         raise NotImplementedError
 
+def validate(env, new_height, x, y, add):
+    """
+    Validate a block action:
+        must exist a neighbor location with correct height, and is reachable before and after the action
+    """
+    new_valid = env.valid_bfs_map(new_height, degree=valid_degree)
+    h = new_height[x, y] - 1 if add else new_height[x, y] + 1
+    valid = False
+    for (x2, y2) in env.valid_neighbor[x, y]:
+        if add and new_height[x2, y2] == h and new_valid[0, x2, y2]:
+            valid = True
+            break
+        if not add and new_height[x2, y2] == h-1 and new_valid[0, x2, y2]:
+            valid = True
+            break
+    return valid, new_valid
+
 def validate2(env, new_height, x, y, add, old_valid):
     """
     Validate a block action (incremental):
@@ -91,14 +108,17 @@ def validate2(env, new_height, x, y, add, old_valid):
         h = new_height[x, y] - 1 if add else new_height[x, y] + 1
         for (x2, y2) in env.valid_neighbor[x, y]:
             # x, y new location
+            
             if ((x, y), (x2, y2)) not in min_spanning_tree.edges and ((x2, y2), (x, y)) not in min_spanning_tree.edges:
                 continue
+
             if add and new_height[x2, y2] == h and new_valid[0, x2, y2]:
                 valid = True
                 break
             if not add and new_height[x2, y2] == h - 1 and new_valid[0, x2, y2]:
                 valid = True
                 break
+            
     return valid, new_valid
 
 def get_plan(node):
@@ -134,12 +154,15 @@ def high_lv_plan():
     valid = env.valid_bfs_map(env.height, degree=valid_degree)
     root = Node(None, env.height, valid, 0, heuristic(env, env.height, mode=heu_mode), 0)
     push_node(open_list, root,  mode=order_mode)
-    
     closed_list[root.height.tobytes()] = 0
     gen = expand = invalid = dup = dup2 = 0
 
     while len(open_list) > 0:
         node = heapq.heappop(open_list)[-1]
+        # Duplicate detection: skip if the node has been expanded with a lower g value
+        # if node.height.tobytes() in closed_list and node.g > closed_list[node.height.tobytes()]:
+        #     dup2 += 1
+        #     continue
         expand += 1
 
         '''Completion check'''
@@ -154,11 +177,9 @@ def high_lv_plan():
                 '''Validate action'''
                 if not node.valid[a, x, y]:
                     continue
-
                 # Skip removing goal blocks
                 if valid_degree == 2 and not add and node.height[x, y] <= env.goal[x, y]:
                     continue
-
                 # Skip adding a scaffold twice
                 if valid_degree == 3 and add and node.height[x, y] >= env.goal[x, y]:
                     if (node.height[x, y], x, y) in node.added_scaffold:
@@ -166,7 +187,6 @@ def high_lv_plan():
                 new_height = env.execute(node.height.copy(), (x, y), add)
                 new_g = node.g + 1
                 new_height_bytes = new_height.tobytes()
-                
                 # Duplicate detection: only add duplicates to open list if it has a lower g value (may add multiple)
                 if new_height_bytes in closed_list and new_g >= closed_list[new_height_bytes]:
                     dup += 1

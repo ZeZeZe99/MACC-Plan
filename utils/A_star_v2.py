@@ -8,8 +8,10 @@ from itertools import count
 
 class HighLevelPlanner:
     def __init__(self) -> None:
-        self.goal_state = GOAL_MAPS_8[0]
-        self.edges = min_spanning_tree.MinSpanningTree(self.goal_state).edges
+        self.goal_state = GOAL_MAPS_10[0]
+        mst = min_spanning_tree.MinSpanningTree(self.goal_state)
+        self.edges = mst.edges
+        self.usefulness = mst.usefulness
         # self.plan = self.get_plan()
 
     def compute_heuristics(self, node_map):
@@ -37,6 +39,7 @@ class HighLevelPlanner:
         else:
             for nbr in nbrs:
                 if node_map[nbr]==k-1:
+                    #and node_map==k
                     return True
                 
     def get_actions(self, node_map):
@@ -44,12 +47,14 @@ class HighLevelPlanner:
         max_height = 5
         for i in range(node_map.shape[0]):
             for j in range(node_map.shape[1]):
-                if node_map[i,j] < max_height:
+                if node_map[i,j] < max_height and self.usefulness[i,j] > 0:
+                    # add actions
+                    # add only inside the shadow region of the goal
                     if self.check_validity(node_map, i, j, node_map[i,j]+1):
                         new_map = np.copy(node_map)
                         new_map[i,j] += 1
                         actions.append({'state': new_map, 'cost': 1})
-                if node_map[i,j] > 0:
+                if node_map[i,j] > 0 and node_map[i,j] > self.goal_state[i][j]:
                     if self.check_validity(node_map, i, j, node_map[i,j]):
                         new_map = np.copy(node_map)
                         new_map[i,j] -= 1
@@ -65,6 +70,7 @@ class HighLevelPlanner:
         closed_list[(root['state']).tobytes()] = root
         while len(open_list) > 0:
             curr = heapq.heappop(open_list)[3]
+            print("curr", curr['state'])
             # self.reachability, self.reachable_nbrs = rm.get_reachability(curr['state'])
             if np.array_equal(curr['state'], goal_state):
                 print("Found goal_state")
@@ -80,7 +86,8 @@ class HighLevelPlanner:
 
 def main():
     hlp = HighLevelPlanner()
-    hlp.a_star(np.zeros((8,8)), hlp.goal_state)
+    size = len(hlp.goal_state)
+    hlp.a_star(np.zeros((size, size)), hlp.goal_state)
 
 if __name__ == '__main__':
     main()

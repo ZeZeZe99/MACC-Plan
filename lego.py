@@ -26,6 +26,8 @@ class GridWorld:
             self.goal_maps = np.clip(goal.GOAL_MAPS_5, 0, self.h - 1)
         elif self.w == 8:
             self.goal_maps = np.clip(goal.GOAL_MAPS_8, 0, self.h - 1)
+        elif self.w == 10:
+            self.goal_maps = np.clip(goal.GOAL_MAPS_10, 0, self.h - 1)
         else:
             raise NotImplementedError
         self.set_goal()
