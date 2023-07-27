@@ -28,10 +28,12 @@ Heuristic mode
     0: Manhattan distance to goal of current stage
     1: Distance to the end goal, under-estimate
     2: Distance to the end goal, pre-computed
+    3: Teleport, have to exit world
 """
 
-a_star_mode = 3
-heuristic_mode = 2
+a_star_mode = 4
+heuristic_mode = 3
+teleport = heuristic_mode == 3
 
 '''Goal processing'''
 def process_goal(env, goals, carry_stats):
@@ -230,6 +232,32 @@ def heuristic(env, goal_info, stage, x, y, z, gx, gy, lv):
             h = goal_info['d2border'].get((x, y, z), 1000)
             hg = 0
         return h, hg
+    elif heuristic_mode == 3:
+        if stage == 0:
+            d1 = 2  # 'depo' and move into world
+            if x != -1:
+                d1 += min(x, w1 - x - 1, y, w2 - y - 1) + 1  # Move to border + leave world
+            d2 = 999
+            for (nx, ny) in env.valid_neighbor[gx, gy]:
+                d2 = min(nx, w1 - nx - 1, ny, w2 - ny - 1, d2)
+            d = d1 + d2 * 2 + 1
+        elif stage == 1:
+            if x == -1:
+                d1 = 999
+                for (nx, ny) in env.valid_neighbor[gx, gy]:
+                    d1 = min(d1, nx, w1 - nx - 1, ny, w2 - ny - 1)
+                d = 2 * d1 + 2
+            else:
+                d = 999
+                for (nx, ny) in env.valid_neighbor[gx, gy]:
+                    d1 = min(d, manhattan(x, y, nx, ny))
+                    d2 = min(nx, w1 - nx - 1, ny, w2 - ny - 1)
+                    d = min(d, d1 + d2 + 1)
+        else:
+            d = min(x, w1 - x - 1, y, w2 - y - 1)
+        return d, 0
+
+
     else:
         raise NotImplementedError
 
@@ -345,11 +373,15 @@ def count_collisions(node, aid, paths, heights, t2hid, block_actions):
     height = heights[t2hid[time]] if time in t2hid else heights[-1]
     x, y, z = node.x, node.y, node.z
     px, py = node.parent.x, node.parent.y
+    if x == -1:
+        return collision
     for i in range(len(paths)):
         if i == aid:
             continue
         x2, y2, z2 = paths[i][time][0]
         px2, py2, _ = paths[i][time - 1][0]
+        if x2 == -1:
+            continue
         if x == x2 and y == y2:
             collision += 1
         if x == px2 and y == py2 and px == x2 and py == y2:
@@ -361,7 +393,7 @@ def count_collisions(node, aid, paths, heights, t2hid, block_actions):
             collision += 1
     return collision
 
-def push_node(open_list, node):
+def push_node(open_list, node, gen):
     """
     Push a node to the open list
     A* mode
@@ -382,7 +414,7 @@ def push_node(open_list, node):
     elif a_star_mode == 3:
         heapq.heappush(open_list, (g + h, h2g, h, fuel, x, y, z, node))
     elif a_star_mode == 4:
-        heapq.heappush(open_list, (g + h, collision, h, h2g, fuel, x, y, z, node))
+        heapq.heappush(open_list, (g + h, collision, h, h2g, fuel, x, y, z, gen, node))
     else:
         raise NotImplementedError
 
@@ -407,9 +439,10 @@ def a_star(env, goal_info, locations, constraints, aid, limit=float('inf'), path
 
     open_list = []
     closed_list = dict()
+    gen = 0
     h_val, h2g = heuristic(env, goal_info, stage, ax, ay, az, gx, gy, lv)
     root = Node(None, 0, h_val, h2g, ax, ay, az, stage)
-    push_node(open_list, root)
+    push_node(open_list, root, gen)
 
     while len(open_list) > 0:
         node = heapq.heappop(open_list)[-1]
@@ -423,10 +456,15 @@ def a_star(env, goal_info, locations, constraints, aid, limit=float('inf'), path
         children = []
 
         '''Stage 0: try to interact with depo'''
-        if stage == 0 and (x, y) in env.border_loc and not constrained(x, y, x, y, g + 1, 'depo', cons):
-            h_val, h2g = heuristic(env, goal_info, 1, x, y, z, gx, gy, lv)
-            child = Node(node, g + 1, h_val, h2g, x, y, z, 1, action='depo')
-            children.append(child)
+        if stage == 0:
+            if teleport and x == -1:
+                h_val, h2g = heuristic(env, goal_info, 1, x, y, z, gx, gy, lv)
+                child = Node(node, g + 1, h_val, h2g, x, y, z, 1, action='depo')
+                children.append(child)
+            elif not teleport and (x, y) in env.border_loc and not constrained(x, y, x, y, g + 1, 'depo', cons):
+                h_val, h2g = heuristic(env, goal_info, 1, x, y, z, gx, gy, lv)
+                child = Node(node, g + 1, h_val, h2g, x, y, z, 1, action='depo')
+                children.append(child)
 
         '''Stage 1: try to finish goal'''
         if stage == 1 and goal_ready(goal, x, y, z) and not constrained(x, y, x, y, g + 1, 'goal', cons) \
@@ -455,6 +493,20 @@ def a_star(env, goal_info, locations, constraints, aid, limit=float('inf'), path
                 child = Node(node, g + 1, h_val, h2g, x2, y2, z2, stage)
                 children.append(child)
 
+        '''Teleport: leave world & enter world'''
+        if teleport:
+            if (x, y) in env.border_loc:
+                h_val, h2g = heuristic(env, goal_info, stage, -1, -1, -1, gx, gy, lv)
+                child = Node(node, g + 1, h_val, h2g, -1, -1, -1, stage)
+                children.append(child)
+            elif x == -1:
+                for (x2, y2) in env.border_loc:
+                    if constrained(x, y, x2, y2, g + 1, 'move', cons):
+                        continue
+                    h_val, h2g = heuristic(env, goal_info, stage, x2, y2, 0, gx, gy, lv)
+                    child = Node(node, g + 1, h_val, h2g, x2, y2, 0, stage)
+                    children.append(child)
+
         '''Push children & duplicate detection'''
         for child in children:
             if child.g <= limit:  # Trim nodes with g > limit
@@ -464,7 +516,8 @@ def a_star(env, goal_info, locations, constraints, aid, limit=float('inf'), path
                 val = (child.collision, child.fuel)
                 # New node, fewer collisions, or less fuel
                 if key not in closed_list or closed_list[key] > val:
-                    push_node(open_list, child)
+                    gen += 1
+                    push_node(open_list, child, gen)
                     closed_list[key] = val
 
     return None, None

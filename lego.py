@@ -29,15 +29,6 @@ class GridWorld:
             self.goal_maps = np.clip(goal.GOAL_MAPS_8, 0, self.h - 1)
         else:
             raise NotImplementedError
-        self.set_goal()
-        self.set_shadow()
-
-        # High level plan heuristic
-        self.set_distance_map()
-        self.set_support_map()
-
-        # Low level search heuristic
-        self.set_mirror_map()
 
     '''Initialization'''
     def _set_world(self):
@@ -88,6 +79,7 @@ class GridWorld:
 
         # Valid next locations (valid neighbor + current location)
         self.valid_next_loc = deepcopy(self.valid_neighbor)
+        self.valid_next_loc[(-1, -1)] = set()
         for (x, y) in self.valid_neighbor:
             self.valid_next_loc[(x, y)].add((x, y))
 
@@ -112,26 +104,33 @@ class GridWorld:
                 break
         return goal
 
-    def set_shadow(self):
+    def set_shadow(self, val=False):
         """
         Find the shadow region of the goal map (3D)
+        Calculate shadow value when val=True: number of shadow regions each block belongs to
         """
-        self.shadow = np.zeros(self.world_shape3d, dtype=np.int32)
+        self.shadow = np.zeros(self.world_shape3d, dtype=np.int8)
+        self.shadow_val = np.zeros(self.world_shape3d, dtype=np.int8)
         for x in range(1, self.w - 1):  # Skip border locations
             for y in range(1, self.w - 1):
-                self.cast_shadow(self.goal[x, y] - 1, x, y)
+                shadow = np.zeros(self.world_shape3d, dtype=np.int8) if val else self.shadow
+                self.cast_shadow(self.goal[x, y] - 1, x, y, shadow)
+                if val:
+                    self.shadow |= shadow
+                    self.shadow_val += shadow
+        self.shadow_height = np.sum(self.shadow, axis=0)
         '''Filter only scaffold blocks'''
         self.scaf = self.shadow * (1 - self.goal3d)
 
-    def cast_shadow(self, lv, x, y):
+    def cast_shadow(self, lv, x, y, shadow):
         if lv < 0:
             return
-        if self.shadow[lv, x, y] == 1:
+        if shadow[lv, x, y] == 1:
             return
-        self.shadow[lv, x, y] = 1
+        shadow[lv, x, y] = 1
         for (x2, y2) in [(x, y), (x-1, y), (x+1, y), (x, y-1), (x, y+1)]:
             if (x2, y2) in self.valid_loc and (x2, y2) not in self.border_loc:
-                self.cast_shadow(lv-1, x2, y2)
+                self.cast_shadow(lv-1, x2, y2, shadow)
 
     '''Validation'''
     def valid_bfs_map(self, height, degree):
@@ -250,15 +249,6 @@ class GridWorld:
                 if abs(h2 - h3) <= 1 and valid_map[0, x3, y3] == 0 and (x3, y3) not in reach:
                     reach.append((x3, y3))
         return True, valid_map
-
-    '''Execution'''
-    def execute(self, height, loc, add):
-        x, y = loc
-        if add:
-            height[x, y] += 1
-        else:
-            height[x, y] -= 1
-        return height
 
     '''Scaffold estimate'''
     def set_distance_map(self):

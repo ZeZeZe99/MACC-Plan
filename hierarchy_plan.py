@@ -4,38 +4,9 @@ import pstats
 
 import lego
 import config
-from high_plan import high_lv_plan
+from high_plan_astar import high_lv_plan
 from cbs import cbs
-
-
-def task_allocation(todo, assignment):
-    # Select candidate tasks
-    tasks = todo[:min(num, len(todo))]
-    tasks, num_dummy = adjust_task(tasks)
-    # Allocate tasks to agents
-    i = 0
-    for a in range(num):
-        if assignment[a] is None:
-            while tasks[i] in assignment:
-                i += 1
-            assignment[a] = tasks[i]
-    return assignment, num_dummy
-
-def adjust_task(tasks):
-    # Delay a task if it deals with the same block as another task
-    delay = []
-    for i in range(len(tasks)):
-        for j in range(i + 1, len(tasks)):
-            if tasks[i][1:] == tasks[j][1:]:
-                delay.append(j)
-    final_tasks = []
-    for i in range(len(tasks)):
-        if i not in delay:
-            final_tasks.append(tasks[i])
-    # Append dummy tasks if there are fewer tasks than agents
-    num_dummy = num - len(final_tasks)
-    final_tasks += num_dummy * [(-1, -1, -1, -1)]
-    return final_tasks, num_dummy
+from task_allocation import allocate
 
 def snapshot(path, carry, goal):
     """Convert (loc, action) to (loc, carry, goal)"""
@@ -56,7 +27,7 @@ def plan():
     full_paths = [[(positions[i], carry_stats[i], None)] for i in range(num)]
     flow_time = generate = expand = 0
     while finish < total:
-        goals, num_dummy = task_allocation(todo, goals)
+        goals, num_dummy = allocate(num, todo, goals)
         paths, times, stat = cbs(env, goals, positions, carry_stats)
         generate += stat[0]
         expand += stat[1]
@@ -103,6 +74,7 @@ if __name__ == '__main__':
     arg = arg.parse_args()
 
     env = lego.GridWorld(arg)
+    env.set_mirror_map()
     positions = [(0, 1, 0), (0, 2, 0), (0, 3, 0)]
     carry_stats = [True, True, True]
     num = min(arg.num, len(positions))
@@ -111,13 +83,17 @@ if __name__ == '__main__':
     profiler.enable()
 
     if arg.start == 0:
-        high_path = high_lv_plan(env)
-        goal = env.goal
+        env.set_goal()
+        env.set_shadow()
+        env.set_distance_map()
+        env.set_support_map()
+        high_path, valids = high_lv_plan(env)
         with open('result/high_action.pkl', 'wb') as f:
             pk.dump([env.goal, high_path], f)
     else:
         with open('result/high_action.pkl', 'rb') as f:
-            goal, high_path = pk.load(f)
+            goal, high_path, info = pk.load(f)
+            env.shadow = info['shadow']
     print(f'Number of actions: {len(high_path)}')
     print(high_path)
 
@@ -133,4 +109,4 @@ if __name__ == '__main__':
     #     print(t, [paths[i][t] for i in range(num)])
 
     with open('result/path.pkl', 'wb') as f:
-        pk.dump([goal, paths], f)
+        pk.dump([env.goal, paths], f)

@@ -132,6 +132,9 @@ def detect_conflict(heights, t2hid, path1, path2, block_action1, block_action2):
             loc1, loc2 = path1[t][0][:2], path2[t][0][:2]
             z1, z2 = path1[t][0][2], path2[t][0][2]
 
+            if loc1[0] == -1 or loc2[0] == -1:
+                continue
+
             if r == 0:
                 # Level conflict (agent's z level doesn't match the height, due to the other agent's block action)
                 if gloc1 == loc2 and height[loc2] != z2 and (lv1 == z2 or lv1 == z2 - 1):
@@ -278,8 +281,8 @@ def order_conflicts(conflicts):
         raise NotImplementedError
 
 def push_node(open_list, node):
-    """Push a node into the open list. Order = cost, # conflicts, -gen_id"""
-    heapq.heappush(open_list, (node.cost, len(node.conflicts), -node.gen_id, node))
+    """Push a node into the open list. Order = cost, # conflicts, gen_id"""
+    heapq.heappush(open_list, (node.cost, len(node.conflicts), node.gen_id, node))
 
 def cbs(env, goals, positions, carry_stats):
     height = env.height
@@ -365,6 +368,8 @@ if __name__ == '__main__':
     arg = arg.parse_args()
 
     env = lego.GridWorld(arg)
+    env.set_mirror_map()
+
     # env.height[1, 2] = 1
     # env.height[2:4, 2] = 2
     # positions = [(0, 1, 0), (1, 2, 1), (1, 5, 0)]
