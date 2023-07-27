@@ -1,7 +1,6 @@
 import heapq
 import numpy as np
 import pickle as pk
-from line_profiler import LineProfiler
 import cProfile
 import pstats
 
@@ -24,6 +23,8 @@ valid_degree = 2
 heu_mode = 1
 order_mode = 0
 
+
+'''Heuristic'''
 def heuristic(env, height, mode=0):
     """
     Calculate heuristic value for a given height map and a goal map
@@ -63,18 +64,8 @@ def heuristic_diff(env, loc, h, add, mode=0):
     else:
         raise NotImplementedError
 
-def push_node(open_list, node, mode=0):
-    """
-    Push node to open list
-    Sort order (increasing):
-        Mode 0: f, h, gen_id
-    """
-    f = node.g + node.h
-    if mode == 0:
-        heapq.heappush(open_list, (f, node.h, node.gen_id, node))
-    else:
-        raise NotImplementedError
 
+'''Validation'''
 def validate(env, new_height, x, y, add):
     """
     Validate a block action:
@@ -110,23 +101,28 @@ def validate2(env, new_height, x, y, add, old_valid):
                 break
     return valid, new_valid
 
-def get_plan(node):
-    plan = []
-    while node is not None:
-        plan.append(node.height)
-        node = node.parent
-    return plan[::-1]
 
-def get_action(plan):
-    actions = []
-    for i in range(len(plan) - 1):
-        diff = plan[i+1] - plan[i]
-        x, y = np.argwhere(diff)[0]
-        h1, h2 = plan[i][x, y], plan[i+1][x, y]
-        add = h2 > h1
-        lv = min(h1, h2)
-        actions.append((int(add), x, y, lv))
-    return actions
+'''Execution'''
+def execute(height, loc, add):
+    if add:
+        height[loc] += 1
+    else:
+        height[loc] -= 1
+    return height
+
+
+'''Planning'''
+def push_node(open_list, node, mode=0):
+    """
+    Push node to open list
+    Sort order (increasing):
+        Mode 0: f, h, gen_id
+    """
+    f = node.g + node.h
+    if mode == 0:
+        heapq.heappush(open_list, (f, node.h, node.gen_id, node))
+    else:
+        raise NotImplementedError
 
 def high_lv_plan(env):
     """
@@ -156,7 +152,7 @@ def high_lv_plan(env):
         '''Completion check'''
         if np.array_equal(node.height, env.goal):
             print(f'Generated: {gen}, Expanded: {expand}, Invalid: {invalid}, Duplicate: {dup}, Duplicate2: {dup2}')
-            return get_action(get_plan(node))
+            return get_plan(node)
 
         '''Search for child nodes'''
         for a in range(1, 3):
@@ -172,7 +168,7 @@ def high_lv_plan(env):
                 if valid_degree == 3 and add and node.height[x, y] >= env.goal[x, y]:
                     if (node.height[x, y], x, y) in node.added_scaffold:
                         continue
-                new_height = env.execute(node.height.copy(), (x, y), add)
+                new_height = execute(node.height.copy(), (x, y), add)
                 new_g = node.g + 1
                 new_height_bytes = new_height.tobytes()
                 # Duplicate detection: only add duplicates to open list if it has a lower g value (may add multiple)
@@ -199,6 +195,22 @@ def high_lv_plan(env):
 
     raise ValueError('No solution found')
 
+def get_plan(node):
+    heights, valids, actions = [], [], []
+    while node is not None:
+        heights.append(node.height)
+        valids.append(node.valid)
+        node = node.parent
+    heights.reverse()
+    valids.reverse()
+    for i in range(len(heights) - 1):
+        diff = heights[i+1] - heights[i]
+        x, y = np.argwhere(diff)[0]
+        h1, h2 = heights[i][x, y], heights[i+1][x, y]
+        add = h2 > h1
+        lv = min(h1, h2)
+        actions.append((int(add), x, y, lv))
+    return actions, valids
 
 class Node:
     def __init__(self, parent, height, valid, g_val, h_val, gen_id):
@@ -209,11 +221,16 @@ class Node:
         self.h = h_val
         self.gen_id = gen_id
 
+
 if __name__ == '__main__':
     arg = config.get_parser()
     arg = arg.parse_args()
 
     env = lego.GridWorld(arg)
+    env.set_goal()
+    env.set_shadow()
+    env.set_distance_map()
+    env.set_support_map()
 
     # lp = LineProfiler()
     # lp_wrapper = lp(high_lv_plan)
@@ -222,12 +239,12 @@ if __name__ == '__main__':
 
     profiler = cProfile.Profile()
     profiler.enable()
-    plan = high_lv_plan(env)
+    high_actions, valids = high_lv_plan(env)
     profiler.disable()
     stats = pstats.Stats(profiler).sort_stats('tottime')
     stats.print_stats()
 
-    print(f'Number of actions: {len(plan)}')
-    print(plan)
+    print(f'Number of actions: {len(high_actions)}')
+    print(high_actions)
     with open('result/high_action.pkl', 'wb') as f:
-        pk.dump([env.goal, plan], f)
+        pk.dump([env.goal, high_actions, {'valid': valids, 'shadow': env.shadow}], f)

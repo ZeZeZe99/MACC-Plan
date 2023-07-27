@@ -8,7 +8,7 @@ z0 = np.array([0, 0, 0, 0, 1, 1, 1, 1])
 
 block_color = {
     0: ['white', 0],         # air
-    1: ['cyan', .5],         # unplaced goal block
+    1: ['cyan', .3],         # unplaced goal block
     2: ['royalblue', 1],     # placed goal block
     3: ['red', .7],          # scaffold block
     4: ['black', 1],         # agent
@@ -147,9 +147,10 @@ def convert_path(goal, plan):
                 lv = height[x, y]
             else:
                 x, y, lv = loc
-            frames[t+1, lv, x, y] = 4
-            if carry:
-                frames[t+1, lv+1, x, y] = 5
+            if x != -1:
+                frames[t+1, lv, x, y] = 4
+                if carry:
+                    frames[t+1, lv+1, x, y] = 5
             if g is not None:
                 add, gx, gy, glv = g
                 scaffold = 1 - goal3d[glv, gx, gy]
@@ -163,11 +164,11 @@ def convert_path(goal, plan):
 
 
 if __name__ == '__main__':
-    # high = True
-    high = False
+    high = True
+    # high = False
     if high:
         with open('result/high_action.pkl', 'rb') as f:
-            goal, plan = pk.load(f)
+            goal, plan, _ = pk.load(f)
             h = np.max(goal)
     else:
         with open('result/path.pkl', 'rb') as f:
