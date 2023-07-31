@@ -4,7 +4,7 @@ import pstats
 
 import lego
 import config
-from high_plan_astar import high_lv_plan
+from high_lv_astar import high_lv_plan
 from cbs import cbs
 from task_allocation import allocate
 

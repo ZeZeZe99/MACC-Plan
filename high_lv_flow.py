@@ -205,7 +205,7 @@ if __name__ == '__main__':
     env = lego.GridWorld(arg)
     env.set_goal()
     env.set_shadow()
-    high_actions = flow(env, 33, relax=False, noop=False)
+    high_actions = flow(env, 15, relax=False, noop=False)
 
     with open('result/high_action.pkl', 'wb') as f:
         pk.dump([env.goal, high_actions, {'valid': [], 'shadow': env.shadow}], f)

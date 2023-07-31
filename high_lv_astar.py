@@ -6,6 +6,7 @@ import pstats
 
 import lego
 import config
+from scaffold_est import init_scaffold_info, update_scaffold_info, cal_goal_val
 
 '''
 Valid degree:
@@ -22,10 +23,11 @@ Order mode:
 valid_degree = 2
 heu_mode = 1
 order_mode = 0
+dup_mode = 0
 
 
 '''Heuristic'''
-def heuristic(env, height, mode=0):
+def heuristic(env, height, mode=0, new_info=None):
     """
     Calculate heuristic value for a given height map and a goal map
     Mode 0: # of plan blocks not placed + # of scaffold blocks
@@ -41,16 +43,20 @@ def heuristic(env, height, mode=0):
         # 1.1: consider support at all levels (d-support)
         # return np.abs(height - env.goal).sum() + 2 * env.get_goal_val(height).sum()
         # 1.2: consider d-support, and use goal groupings
-        return np.abs(height - env.goal).sum() + 2 * env.get_goal_val_group(height).sum()
+        if new_info is None:
+            return np.abs(height - env.goal).sum() + 2 * env.get_goal_val_group(height)
+        else:
+            return np.abs(height - env.goal).sum() + 2 * cal_goal_val(env, new_info)
     else:
         raise NotImplementedError
 
-def heuristic_diff(env, loc, h, add, mode=0):
+def heuristic_diff(add, loc, goal, new_height, new_info, mode=0):
     """Calculate difference of heuristic value after adding or removing a block"""
+    h = new_height[loc]
     if add:
-        scaffold = h + 1 > env.goal[loc[0], loc[1]]
+        scaffold = h > goal[loc]
     else:
-        scaffold = h > env.goal[loc[0], loc[1]]
+        scaffold = h >= goal[loc]
 
     if mode == 0:
         if add and scaffold:
@@ -61,6 +67,16 @@ def heuristic_diff(env, loc, h, add, mode=0):
             return -1
         else:
             return 1
+    elif mode == 1:
+        if add and scaffold:
+            h_diff = 1
+        elif add and not scaffold:
+            h_diff = -1
+        elif not add and scaffold:
+            h_diff = -1
+        else:
+            h_diff = 1
+        h_diff += 2 * env.update_goal_val(new_info)
     else:
         raise NotImplementedError
 
@@ -111,6 +127,66 @@ def execute(height, loc, add):
     return height
 
 
+'''Symmetry detection'''
+def transform(matrix, mode):
+    """8 transformations of a 2D matrix. Last 4 only used for square matrix"""
+    if mode == 0:
+        return matrix
+    if mode == 1:
+        return np.rot90(matrix, 2)
+    if mode == 2:
+        return np.flipud(matrix)
+    if mode == 3:
+        return np.fliplr(matrix)
+    if mode == 4:
+        return np.rot90(matrix, 1)
+    if mode == 5:
+        return np.rot90(matrix, 3)
+    if mode == 6:
+        return np.rot90(np.flipud(matrix), 1)
+    else:
+        return np.rot90(np.flipud(matrix), 3)
+
+def status(env, height, world, valid):
+    """"""
+    block = world[0]
+    goal_added = world[1]
+    '''Goal blocks'''
+    n_goal_added = goal_added.sum()
+    goal_above = env.goal > height
+    n_goal_addable = (goal_above & valid[1]).sum()
+    n_goal_reachable = (goal_above & valid[0]).sum()
+
+    '''Scaffold blocks'''
+    scaffold_added = world - goal_added
+    n_scaffold_added = scaffold_added.sum()
+    scaffold_above = (env.shadow_height > height) & np.logical_not(goal_above)
+    n_scaffold_addable = (scaffold_above & valid[1]).sum()
+    scaffold_below = height > env.goal
+    n_scaffold_removable = (scaffold_below & valid[2]).sum()
+    shadow_added = scaffold_added * env.shadow_val
+    n_shadow_added = shadow_added.sum()
+    return (n_goal_added, n_scaffold_added, n_shadow_added, n_goal_addable, n_goal_reachable,
+            n_scaffold_addable, n_scaffold_removable)
+
+def detect_duplicate(env, closed_list, g, height, mode=0, world=None, valid=None):
+    if mode == 0:
+        key = height.tobytes()
+        duplicate = key in closed_list and g >= closed_list[key]
+        return duplicate, key
+    elif mode == 1:
+        matrix = (height - env.goal)[env.box]
+        for t in range(8 if env.square_box else 4):
+            key = transform(matrix, t).tobytes()
+            if key in closed_list and g >= closed_list[key]:
+                return True, key
+        return False, matrix.tobytes()
+    elif mode == 2:
+        key = status(env, height, world, valid)
+        duplicate = key in closed_list and g >= closed_list[key]
+        return duplicate, key
+
+
 '''Planning'''
 def push_node(open_list, node, mode=0):
     """
@@ -118,9 +194,10 @@ def push_node(open_list, node, mode=0):
     Sort order (increasing):
         Mode 0: f, h, gen_id
     """
-    f = node.g + node.h
+    h = node.h
+    f = node.g + h
     if mode == 0:
-        heapq.heappush(open_list, (f, node.h, node.gen_id, node))
+        heapq.heappush(open_list, (f, h, node.gen_id, node))
     else:
         raise NotImplementedError
 
@@ -134,12 +211,20 @@ def high_lv_plan(env):
     """
     open_list = []
     closed_list = dict()  # key: (height, g), value: Node
+    closed_stat = dict()
 
     valid = env.valid_bfs_map(env.height, degree=valid_degree)
-    root = Node(None, env.height, valid, 0, heuristic(env, env.height, mode=heu_mode), 0)
+    root_info = init_scaffold_info(env, env.height)
+    stat = status(env, env.height, root_info['world'], valid)
+    root_h = heuristic(env, env.height, mode=heu_mode, new_info=root_info)
+    root = Node(None, env.height, valid, 0, root_h, 0, root_info)
     push_node(open_list, root,  mode=order_mode)
-    closed_list[root.height.tobytes()] = 0
     gen = expand = invalid = dup = dup2 = 0
+
+    if dup_mode == 0:
+        closed_list[root.height.tobytes()] = 0
+    elif dup_mode == 2:
+        closed_stat[stat] = 0
 
     while len(open_list) > 0:
         node = heapq.heappop(open_list)[-1]
@@ -158,40 +243,48 @@ def high_lv_plan(env):
         for a in range(1, 3):
             add = a == 1
             for (x, y) in [(x, y) for x in range(env.w) for y in range(env.w)]:
-                '''Validate action'''
+                '''1st round action validation'''
                 if not node.valid[a, x, y]:
                     continue
                 # Skip removing goal blocks
                 if valid_degree == 2 and not add and node.height[x, y] <= env.goal[x, y]:
                     continue
-                # Skip adding a scaffold twice
-                if valid_degree == 3 and add and node.height[x, y] >= env.goal[x, y]:
-                    if (node.height[x, y], x, y) in node.added_scaffold:
-                        continue
-                new_height = execute(node.height.copy(), (x, y), add)
+
+                '''Execute action'''
                 new_g = node.g + 1
-                new_height_bytes = new_height.tobytes()
-                # Duplicate detection: only add duplicates to open list if it has a lower g value (may add multiple)
-                if new_height_bytes in closed_list and new_g >= closed_list[new_height_bytes]:
-                    dup += 1
-                    continue
-                # Valid path detection: agent should have a way back
-                # valid, new_valid = validate(env, new_height, x, y, add)
+                new_height = execute(node.height.copy(), (x, y), add)
+                z = new_height[x, y] - 1 if add else new_height[x, y]
+                new_world = node.info['world'].copy()
+                is_goal = env.goal3d[z, x, y] == 1
+                new_world[0, z, x, y] = add
+                new_world[0, z, x, y] = is_goal * add
+
+                '''1st round duplicate detection'''
+                if dup_mode == 0:
+                    duplicate, key = detect_duplicate(env, closed_list, new_g, new_height, mode=0)
+                    if duplicate:
+                        dup += 1
+                        continue
+
+                '''2nd round action validation: agent should have a way back'''
                 valid, new_valid = validate2(env, new_height, x, y, add, node.valid)
                 if not valid:
                     invalid += 1
                     continue
+
+                '''2nd round duplicate detection'''
+                if dup_mode == 2:
+                    duplicate, key = detect_duplicate(env, closed_list, new_g, new_height,
+                                                      mode=2, world=new_world, valid=new_valid)
+
                 '''Generate child node'''
                 gen += 1
-                # new_h = node.h + heuristic_diff(env, (x, y), node.height[x, y], add, mode=heu_mode)
-                new_h = heuristic(env, new_height, mode=heu_mode)
-                new_node = Node(node, new_height, new_valid, new_g, new_h, gen)
-                # Mark added scaffold (can only add once)
-                # if valid_degree == 3 and add and new_height[x, y] > env.goal[x, y]:
-                #     new_node.added_scaffold.add((new_height[x, y] - 1, x, y))
+                new_info = update_scaffold_info(env, node.info, add, (x, y), z, new_world)
+                new_h = heuristic(env, new_height, mode=heu_mode, new_info=new_info)
+                new_node = Node(node, new_height, new_valid, new_g, new_h, gen, new_info)
 
                 push_node(open_list, new_node, mode=order_mode)
-                closed_list[new_height_bytes] = new_g
+                closed_list[key] = new_g
 
     raise ValueError('No solution found')
 
@@ -213,13 +306,14 @@ def get_plan(node):
     return actions, valids
 
 class Node:
-    def __init__(self, parent, height, valid, g_val, h_val, gen_id):
+    def __init__(self, parent, height, valid, g_val, h_val, gen_id, info):
         self.parent = parent
         self.height = height
         self.valid = valid
         self.g = g_val
         self.h = h_val
         self.gen_id = gen_id
+        self.info = info
 
 
 if __name__ == '__main__':
@@ -228,7 +322,7 @@ if __name__ == '__main__':
 
     env = lego.GridWorld(arg)
     env.set_goal()
-    env.set_shadow()
+    env.set_shadow(val=True)
     env.set_distance_map()
     env.set_support_map()
 
