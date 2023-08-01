@@ -37,14 +37,14 @@ def connect_goals(env, workspace, x, y, g_map, val=1, new_val=0):
 def find_group_support(env, groups):
     """
     Find the d-support set of each group
-    Return a list of support maps, each map is of shape (num_groups, lv, w, w)
+    Return a list of support maps, each map is of shape (num_groups, H - 1, w, w)
     """
     group2support = []
     for lv in range(1, env.H):  # For goals at each level
         group_map = groups[lv - 1]
         gids = np.unique(group_map)[1:]
         num = len(gids)
-        support_map = np.zeros((num, lv, env.w, env.w), dtype=np.int8)
+        support_map = np.zeros((num, env.H - 1, env.w, env.w), dtype=np.int8)
         for i, g in enumerate(gids):  # For each group
             g_map = group_map == g
             s_map = support_map[i]
@@ -71,24 +71,26 @@ def cast_scaffold_value(env, info):
         for i in range(num):  # For each group
             for slv in range(lv):
                 lv_support = supports[i, slv]
-                u, v = cal_scaffold_val(slv, lv_support, info['world'])
+                u, v = cal_scaffold_val(slv, lv_support, info['world'], env.goal3d)
                 val[slv] += v
                 useful[i, slv] = u
         useful_support.append(useful)
     return scaffold_val, useful_support
 
-def cal_scaffold_val(lv, support, world):
+def cal_scaffold_val(lv, support, world, goal3d):
     """
     Calculate the scaffold value
-    If a useful support is already added, scaffold value is 0
-    Otherwise, scaffold value is 1
+    If a useful support exists, scaffold value is 0; otherwise, it's 1
     A support is useful if:
         1. It's within the specific support set
-        2. It doesn't have an added goal above it
+        2. It's an added scaffold block, or
+        3. It's an un-added goal block, or
+        4. It's an added goal block with no goal block added above
     """
     block = world[0, lv]
     goal_above = world[1, lv + 1]
-    useful = support * block * (1 - goal_above)
+    goal = goal3d[lv]
+    useful = support * (block + goal) * (1 - goal_above)
     if useful.sum() > 0:
         return 0, 0
     return 1, support * (1 - goal_above)
@@ -119,6 +121,7 @@ def update_group(env, info, add, loc, z):
     group_map = info['groups'][z - 1]
     if add:  # Added a goal block, check if it breaks a group into two
         gid = group_map[loc]
+        assert gid != 0
         new_id = group_map.max() + 1
         group_map[loc] = 0
         for nx, ny in env.search_neighbor[loc]:
@@ -144,12 +147,13 @@ def update_group(env, info, add, loc, z):
             group_map[loc] = gid
         else:
             group_map[loc] = group_map.max() + 1
+    info['groups'][z - 1] = group_map
 
 def update_group_support(env, info, z):
     group_map = info['groups'][z - 1]
     gids = np.unique(group_map)[1:]
     num = len(gids)
-    support_map = np.zeros((num, z, env.w, env.w), dtype=np.int8)
+    support_map = np.zeros((num, env.H - 1, env.w, env.w), dtype=np.int8)
     for i, g in enumerate(gids):  # For each group
         g_map = group_map == g
         s_map = support_map[i]
@@ -176,7 +180,7 @@ def update_scaffold_value(env, info, z, is_goal):
             num = useful.shape[0]
             for i in range(num):  # For each group
                 lv_support = support[i, slv]
-                u, v = cal_scaffold_val(slv, lv_support, info['world'])
+                u, v = cal_scaffold_val(slv, lv_support, info['world'], env.goal3d)
                 val += v
                 useful[i, slv] = u
             info['scaffold_val'][lv - 1, slv] = val
@@ -188,7 +192,7 @@ def update_scaffold_value(env, info, z, is_goal):
         for i in range(num):  # For each group
             for slv in range(z):
                 lv_support = support[i, slv]
-                u, v = cal_scaffold_val(slv, lv_support, info['world'])
+                u, v = cal_scaffold_val(slv, lv_support, info['world'], env.goal3d)
                 val[slv] += v
                 useful[i, slv] = u
         info['scaffold_val'][z - 1] = val

@@ -129,16 +129,9 @@ class GridWorld:
                 if val:
                     self.shadow |= shadow
                     self.shadow_val += shadow
+        self.shadow_height = np.sum(self.shadow, axis=0)
         '''Filter only scaffold blocks'''
         self.scaf = self.shadow * (1 - self.goal3d)
-        '''Find the bounding box of the 2D scaffold region'''
-        self.shadow_height = np.sum(self.shadow, axis=0)
-        rows = np.any(self.shadow_height, axis=1)
-        cols = np.any(self.shadow_height, axis=0)
-        rmin, rmax = np.where(rows)[0][[0, -1]]
-        cmin, cmax = np.where(cols)[0][[0, -1]]
-        self.box = np.s_[rmin:rmax + 1, cmin:cmax + 1]
-        self.square_box = (rmax - rmin) == (cmax - cmin)
 
     def cast_shadow(self, lv, x, y, shadow):
         if lv < 0:

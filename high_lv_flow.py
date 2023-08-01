@@ -33,7 +33,7 @@ Objective:
 """
 
 
-def flow(env, T, relax=False, noop=False):
+def flow(env, T, noop=False):
     max_h = np.max(env.goal)
     workspace = (env.shadow_height > 0) * 1
 
@@ -71,8 +71,6 @@ def flow(env, T, relax=False, noop=False):
 
     '''Create model'''
     model = grb.Model()
-    if relax:
-        model.setParam('OutputFlag', 0)
 
     '''Create variables'''
     for t in range(T + 1):
@@ -167,13 +165,6 @@ def flow(env, T, relax=False, noop=False):
     else:
         model.setObjective(0)
 
-    '''Relax: check feasibility'''
-    if relax:
-        relaxed_model = model.copy()
-        relaxed_model.feasRelaxS(1, False, False, False)
-        relaxed_model.optimize()
-        return relaxed_model.status != grb.GRB.INFEASIBLE
-
     '''Solve'''
     model.optimize()
 
@@ -205,7 +196,7 @@ if __name__ == '__main__':
     env = lego.GridWorld(arg)
     env.set_goal()
     env.set_shadow()
-    high_actions = flow(env, 15, relax=False, noop=False)
+    high_actions = flow(env, 18, noop=False)
 
-    with open('result/high_action.pkl', 'wb') as f:
-        pk.dump([env.goal, high_actions, {'valid': [], 'shadow': env.shadow}], f)
+    with open('result/high_action_5.pkl', 'wb') as f:
+        pk.dump([high_actions, {'goal': env.goal, 'shadow': env.shadow}], f)

@@ -13,17 +13,16 @@ Valid degree:
     0: all valid locations reachable
     1: valid locations within shadow region
     2: valid locations within shadow region, cannot remove goal blocks
-    3: valid locations within shadow region, cannot place a scaffold block twice
 Heuristic mode:
     0: # of plan blocks not placed + # of scaffold blocks
     1: # of plan blocks not placed + # of scaffold blocks + 2 * sum (goal value)
 Order mode:
     0: f -> h -> generation order
 '''
-valid_degree = 2
+valid_degree = 1
 heu_mode = 1
 order_mode = 0
-dup_mode = 0
+sym_mode = 1
 
 
 '''Heuristic'''
@@ -50,35 +49,35 @@ def heuristic(env, height, mode=0, new_info=None):
     else:
         raise NotImplementedError
 
-def heuristic_diff(add, loc, goal, new_height, new_info, mode=0):
-    """Calculate difference of heuristic value after adding or removing a block"""
-    h = new_height[loc]
-    if add:
-        scaffold = h > goal[loc]
-    else:
-        scaffold = h >= goal[loc]
-
-    if mode == 0:
-        if add and scaffold:
-            return 1
-        elif add and not scaffold:
-            return -1
-        elif not add and scaffold:
-            return -1
-        else:
-            return 1
-    elif mode == 1:
-        if add and scaffold:
-            h_diff = 1
-        elif add and not scaffold:
-            h_diff = -1
-        elif not add and scaffold:
-            h_diff = -1
-        else:
-            h_diff = 1
-        h_diff += 2 * env.update_goal_val(new_info)
-    else:
-        raise NotImplementedError
+# def heuristic_diff(add, loc, goal, new_height, new_info, mode=0):
+#     """Calculate difference of heuristic value after adding or removing a block"""
+#     h = new_height[loc]
+#     if add:
+#         scaffold = h > goal[loc]
+#     else:
+#         scaffold = h >= goal[loc]
+#
+#     if mode == 0:
+#         if add and scaffold:
+#             return 1
+#         elif add and not scaffold:
+#             return -1
+#         elif not add and scaffold:
+#             return -1
+#         else:
+#             return 1
+#     elif mode == 1:
+#         if add and scaffold:
+#             h_diff = 1
+#         elif add and not scaffold:
+#             h_diff = -1
+#         elif not add and scaffold:
+#             h_diff = -1
+#         else:
+#             h_diff = 1
+#         h_diff += 2 * env.update_goal_val(new_info)
+#     else:
+#         raise NotImplementedError
 
 
 '''Validation'''
@@ -128,26 +127,7 @@ def execute(height, loc, add):
 
 
 '''Symmetry detection'''
-def transform(matrix, mode):
-    """8 transformations of a 2D matrix. Last 4 only used for square matrix"""
-    if mode == 0:
-        return matrix
-    if mode == 1:
-        return np.rot90(matrix, 2)
-    if mode == 2:
-        return np.flipud(matrix)
-    if mode == 3:
-        return np.fliplr(matrix)
-    if mode == 4:
-        return np.rot90(matrix, 1)
-    if mode == 5:
-        return np.rot90(matrix, 3)
-    if mode == 6:
-        return np.rot90(np.flipud(matrix), 1)
-    else:
-        return np.rot90(np.flipud(matrix), 3)
-
-def status(env, height, world, valid):
+def status(env, height, world, valid, h_val):
     """"""
     block = world[0]
     goal_added = world[1]
@@ -165,26 +145,15 @@ def status(env, height, world, valid):
     scaffold_below = height > env.goal
     n_scaffold_removable = (scaffold_below & valid[2]).sum()
     shadow_added = scaffold_added * env.shadow_val
-    n_shadow_added = shadow_added.sum()
-    return (n_goal_added, n_scaffold_added, n_shadow_added, n_goal_addable, n_goal_reachable,
-            n_scaffold_addable, n_scaffold_removable)
+    v_shadow_added = shadow_added.sum()
 
-def detect_duplicate(env, closed_list, g, height, mode=0, world=None, valid=None):
-    if mode == 0:
-        key = height.tobytes()
-        duplicate = key in closed_list and g >= closed_list[key]
-        return duplicate, key
-    elif mode == 1:
-        matrix = (height - env.goal)[env.box]
-        for t in range(8 if env.square_box else 4):
-            key = transform(matrix, t).tobytes()
-            if key in closed_list and g >= closed_list[key]:
-                return True, key
-        return False, matrix.tobytes()
-    elif mode == 2:
-        key = status(env, height, world, valid)
-        duplicate = key in closed_list and g >= closed_list[key]
-        return duplicate, key
+    return (n_goal_added, n_scaffold_added, v_shadow_added, n_goal_addable, n_goal_reachable,
+            n_scaffold_addable, n_scaffold_removable, h_val)
+
+def detect_symmetry(env, closed_list, g, height, world, valid, h):
+    key = status(env, height, world, valid, h)
+    duplicate = key in closed_list and g >= closed_list[key]
+    return duplicate, key
 
 
 '''Planning'''
@@ -215,15 +184,14 @@ def high_lv_plan(env):
 
     valid = env.valid_bfs_map(env.height, degree=valid_degree)
     root_info = init_scaffold_info(env, env.height)
-    stat = status(env, env.height, root_info['world'], valid)
     root_h = heuristic(env, env.height, mode=heu_mode, new_info=root_info)
     root = Node(None, env.height, valid, 0, root_h, 0, root_info)
     push_node(open_list, root,  mode=order_mode)
     gen = expand = invalid = dup = dup2 = 0
 
-    if dup_mode == 0:
-        closed_list[root.height.tobytes()] = 0
-    elif dup_mode == 2:
+    closed_list[root.height.tobytes()] = 0
+    if sym_mode == 1:
+        stat = status(env, env.height, root_info['world'], valid, root_h)
         closed_stat[stat] = 0
 
     while len(open_list) > 0:
@@ -257,34 +225,37 @@ def high_lv_plan(env):
                 new_world = node.info['world'].copy()
                 is_goal = env.goal3d[z, x, y] == 1
                 new_world[0, z, x, y] = add
-                new_world[0, z, x, y] = is_goal * add
+                new_world[1, z, x, y] = is_goal * add
 
-                '''1st round duplicate detection'''
-                if dup_mode == 0:
-                    duplicate, key = detect_duplicate(env, closed_list, new_g, new_height, mode=0)
-                    if duplicate:
-                        dup += 1
-                        continue
+                '''Duplicate detection'''
+                key = new_height.tobytes()
+                if key in closed_list and closed_list[key] <= new_g:
+                    dup += 1
+                    continue
 
                 '''2nd round action validation: agent should have a way back'''
                 valid, new_valid = validate2(env, new_height, x, y, add, node.valid)
                 if not valid:
                     invalid += 1
                     continue
+                closed_list[key] = new_g  # Save g value for duplicate detection
 
-                '''2nd round duplicate detection'''
-                if dup_mode == 2:
-                    duplicate, key = detect_duplicate(env, closed_list, new_g, new_height,
-                                                      mode=2, world=new_world, valid=new_valid)
+                '''New heuristic value'''
+                new_info = update_scaffold_info(env, node.info, add, (x, y), z, new_world)
+                new_h = heuristic(env, new_height, mode=heu_mode, new_info=new_info)
+
+                '''Symmetry detection'''
+                if sym_mode == 1:
+                    duplicate, key = detect_symmetry(env, closed_stat, new_g, new_height, new_world, new_valid, new_h)
+                    if duplicate:
+                        dup2 += 1
+                        continue
+                    closed_stat[key] = new_g
 
                 '''Generate child node'''
                 gen += 1
-                new_info = update_scaffold_info(env, node.info, add, (x, y), z, new_world)
-                new_h = heuristic(env, new_height, mode=heu_mode, new_info=new_info)
                 new_node = Node(node, new_height, new_valid, new_g, new_h, gen, new_info)
-
                 push_node(open_list, new_node, mode=order_mode)
-                closed_list[key] = new_g
 
     raise ValueError('No solution found')
 
@@ -340,5 +311,5 @@ if __name__ == '__main__':
 
     print(f'Number of actions: {len(high_actions)}')
     print(high_actions)
-    with open('result/high_action.pkl', 'wb') as f:
-        pk.dump([env.goal, high_actions, {'valid': valids, 'shadow': env.shadow}], f)
+    with open('result/high_action_5.pkl', 'wb') as f:
+        pk.dump([high_actions, {'goal': env.goal, 'shadow': env.shadow}], f)

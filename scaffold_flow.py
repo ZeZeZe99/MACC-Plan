@@ -197,7 +197,6 @@ def min_cost_flow(env, height, removal=False):
     # model.printStats()
 
     '''Solution: scaffold to add at each location'''
-    num_scaffold = model.getObjective().getValue()
     scaffold = np.zeros(env.world_shape, dtype=np.int8)
     for loc in cost_var:
         if cost_var[loc].X > 0:
@@ -212,13 +211,14 @@ def min_cost_flow(env, height, removal=False):
         if edge_var[1][(u, v)].X > 0:
             edges[1].add((u, v))
 
-    return num_scaffold, scaffold, edges
+    return scaffold, edges
 
 def propose_scaffold(removal=False):
     height = env.goal.copy()
     scaffold, edges = min_cost_flow(env, height, removal=removal)
     height += scaffold
     print(height)
+    print(f'Scaffold: {scaffold.sum()}')
     return height, edges
 
 def create_flow_graph(edges):

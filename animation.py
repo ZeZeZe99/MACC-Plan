@@ -167,8 +167,9 @@ if __name__ == '__main__':
     high = True
     # high = False
     if high:
-        with open('result/high_action.pkl', 'rb') as f:
-            goal, plan, _ = pk.load(f)
+        with open('result/high_action_5.pkl', 'rb') as f:
+            plan, info = pk.load(f)
+            goal = info['goal']
             h = np.max(goal)
     else:
         with open('result/path.pkl', 'rb') as f:
