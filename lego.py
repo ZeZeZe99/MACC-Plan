@@ -179,9 +179,9 @@ class GridWorld:
                 elif h < h2:  # Remove
                     removable[x2, y2] = 1
                 else:  # Add
-                    if degree == 0 or self.shadow[h2, x2, y2] == 1:
+                    if degree == 0 or (h < self.H and self.shadow[h, x, y] == 1):
                         addable[x2, y2] = 1
-                    if degree == 0 or self.shadow[h, x, y] == 1:
+                    if degree == 0 or (h < self.H and self.shadow[h, x, y] == 1):
                         addable[x, y] = 1
         return np.stack([reachable, addable, removable], axis=0)
 
@@ -315,58 +315,6 @@ class GridWorld:
         right_s, right_d = min(self.w - 1, y + d + 1), d + 1 + min(d, self.w - y - 2)
         s_map[top_s:bottom_s, left_s:right_s] = d_map[top_d:bottom_d, left_d:right_d]
         return s_map
-
-    '''Other goal value estimates (worse version)'''
-    # def cast_scaffold_value(self, height):
-    #     scaffold_v = np.zeros(self.world_shape3d, dtype=np.int32)
-    #     useful_support = dict()
-    #     for lv in range(1, self.H):
-    #         for (x, y) in np.transpose(np.nonzero(self.goal3d[lv] * (height <= lv))):  # Unfinished goals at level lv
-    #             useful_support[(lv, x, y)] = set()
-    #             supports = self.goal2support[(lv, x, y)]
-    #             for d in range(1, lv + 1):
-    #                 d_support = supports[d - 1]
-    #                 if self.filter(lv - d, d_support, height):
-    #                     continue
-    #                 scaffold_v[lv - d] += d_support
-    #                 useful_support[(lv, x, y)].add(d)
-    #     return scaffold_v, useful_support
-    #
-    # def get_goal_val(self, height):
-    #     scaffold_v, useful_support = self.cast_scaffold_value(height)
-    #     goal_v = np.zeros(self.world_shape3d, dtype=np.float32)
-    #     for lv in range(1, self.H):
-    #         for (x, y) in np.transpose(np.nonzero(self.goal3d[lv])):
-    #             if (lv, x, y) not in useful_support:
-    #                 continue
-    #             supports = self.goal2support[(lv, x, y)]
-    #             for d in useful_support[(lv, x, y)]:
-    #                 goal_v[lv, x, y] += 1 / (scaffold_v[lv - d] * supports[d - 1]).max()
-    #     return goal_v
-    #
-    # def get_goal_val_nb(self, height):
-    #     vgs = np.zeros(self.world_shape3d, dtype=np.float32)
-    #     for z in range(1, self.H):
-    #         vg = self.goal3d[z].copy().astype(np.float32)
-    #         for (x, y) in np.transpose(np.nonzero(vg)):
-    #             if height[x, y] >= z:
-    #                 vg[x, y] = 0
-    #                 continue
-    #             for (x2, y2) in self.search_neighbor[(x, y)]:
-    #                 if height[x2, y2] >= z or self.goal[x2, y2] >= z:
-    #                     vg[x, y] = 0
-    #                     break
-    #         scaf = 1 - self.goal3d[z-1] - self.border
-    #         vc = np.zeros((self.w, self.w), dtype=np.int32)
-    #         for (x, y) in np.transpose(np.nonzero(scaf)):
-    #             for (x2, y2) in self.search_neighbor[(x, y)]:
-    #                 if vg[x2, y2] > 0:
-    #                     vc[x, y] += 1
-    #         for (x, y) in np.transpose(np.nonzero(vg)):
-    #             vcs = [vc[x2, y2] for (x2, y2) in self.search_neighbor[(x, y)]]
-    #             vg[x, y] = 1 / max(vcs)
-    #         vgs[z] = vg
-    #     return vgs
 
     '''Low level search functions'''
     def set_mirror_map(self):

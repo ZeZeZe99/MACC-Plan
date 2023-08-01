@@ -100,7 +100,7 @@ if __name__ == '__main__':
     arg = arg.parse_args()
 
     env = lego.GridWorld(arg)
-    with open('result/high_action_5.pkl', 'rb') as f:
+    with open('result/high_action.pkl', 'rb') as f:
         high_actions, info = pk.load(f)
     env.goal = info['goal']
     env.shadow = info['shadow']
