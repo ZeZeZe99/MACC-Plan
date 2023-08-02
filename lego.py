@@ -103,7 +103,7 @@ class GridWorld:
         self.goal_total = self.goal.sum()
         self.H = np.amax(self.goal)
         self.world_shape3d = (self.H, *self.world_shape)
-        self.goal3d = np.zeros(self.world_shape3d, dtype=np.int32)
+        self.goal3d = np.zeros(self.world_shape3d, dtype=np.int8)
         for lv in range(self.H):
             self.goal3d[lv] = self.goal > lv
 
@@ -130,6 +130,14 @@ class GridWorld:
                     self.shadow |= shadow
                     self.shadow_val += shadow
         self.shadow_height = np.sum(self.shadow, axis=0)
+        self.neighbor_val = np.zeros(self.world_shape3d, dtype=np.int8)
+        for x, y in self.valid_loc - self.border_loc:
+            for z in range(self.H):
+                v = 0
+                for x2, y2 in self.search_neighbor[(x, y)]:
+                    v += self.shadow_val[z, x2, y2]
+                self.neighbor_val[z, x, y] = v
+
         '''Filter only scaffold blocks'''
         self.scaf = self.shadow * (1 - self.goal3d)
 
@@ -179,7 +187,7 @@ class GridWorld:
                 elif h < h2:  # Remove
                     removable[x2, y2] = 1
                 else:  # Add
-                    if degree == 0 or (h < self.H and self.shadow[h, x, y] == 1):
+                    if degree == 0 or (h < self.H and self.shadow[h, x2, y2] == 1):
                         addable[x2, y2] = 1
                     if degree == 0 or (h < self.H and self.shadow[h, x, y] == 1):
                         addable[x, y] = 1

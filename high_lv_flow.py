@@ -198,5 +198,6 @@ if __name__ == '__main__':
     env.set_shadow()
     high_actions = flow(env, 18, noop=False)
 
-    with open('result/high_action_5.pkl', 'wb') as f:
+    save_path = f'result/high_action_{arg.map}.pkl' if arg.map > 0 else 'result/high_action.pkl'
+    with open(save_path, 'wb') as f:
         pk.dump([high_actions, {'goal': env.goal, 'shadow': env.shadow}], f)

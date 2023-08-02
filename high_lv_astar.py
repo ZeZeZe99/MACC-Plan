@@ -22,7 +22,7 @@ Order mode:
 valid_degree = 1
 heu_mode = 1
 order_mode = 0
-sym_mode = 1
+# sym_mode = 1
 
 
 '''Heuristic'''
@@ -144,11 +144,15 @@ def status(env, height, world, valid, h_val):
     n_scaffold_addable = (scaffold_above & valid[1]).sum()
     scaffold_below = height > env.goal
     n_scaffold_removable = (scaffold_below & valid[2]).sum()
-    shadow_added = scaffold_added * env.shadow_val
-    v_shadow_added = shadow_added.sum()
 
-    return (n_goal_added, n_scaffold_added, v_shadow_added, n_goal_addable, n_goal_reachable,
-            n_scaffold_addable, n_scaffold_removable, h_val)
+    '''Values'''
+    v_shadow_scaffold = (scaffold_added * env.shadow_val).sum()
+    v_neighbor_scaffold = (scaffold_added * env.neighbor_val).sum()
+    v_shadow_goal = (goal_added * env.shadow_val).sum()
+    v_neighbor_goal = (goal_added * env.neighbor_val).sum()
+
+    return (n_goal_added, n_scaffold_added, n_goal_addable, n_goal_reachable, n_scaffold_addable, n_scaffold_removable,
+            h_val, v_shadow_scaffold, v_neighbor_scaffold, v_neighbor_goal)
 
 def detect_symmetry(env, closed_list, g, height, world, valid, h):
     key = status(env, height, world, valid, h)
@@ -170,7 +174,7 @@ def push_node(open_list, node, mode=0):
     else:
         raise NotImplementedError
 
-def high_lv_plan(env):
+def high_lv_plan(env, sym_mode=0):
     """
     A* search
     Assumptions:
@@ -260,13 +264,11 @@ def high_lv_plan(env):
     raise ValueError('No solution found')
 
 def get_plan(node):
-    heights, valids, actions = [], [], []
+    heights, actions = [], []
     while node is not None:
         heights.append(node.height)
-        valids.append(node.valid)
         node = node.parent
     heights.reverse()
-    valids.reverse()
     for i in range(len(heights) - 1):
         diff = heights[i+1] - heights[i]
         x, y = np.argwhere(diff)[0]
@@ -274,7 +276,7 @@ def get_plan(node):
         add = h2 > h1
         lv = min(h1, h2)
         actions.append((int(add), x, y, lv))
-    return actions, valids
+    return actions
 
 class Node:
     def __init__(self, parent, height, valid, g_val, h_val, gen_id, info):
@@ -304,12 +306,13 @@ if __name__ == '__main__':
 
     profiler = cProfile.Profile()
     profiler.enable()
-    high_actions, valids = high_lv_plan(env)
+    high_actions = high_lv_plan(env, sym_mode=1)
     profiler.disable()
     stats = pstats.Stats(profiler).sort_stats('tottime')
     stats.print_stats()
 
     print(f'Number of actions: {len(high_actions)}')
     print(high_actions)
-    with open('result/high_action_5.pkl', 'wb') as f:
+    save_path = f'result/high_action_{arg.map}.pkl' if arg.map > 0 else 'result/high_action.pkl'
+    with open(save_path, 'wb') as f:
         pk.dump([high_actions, {'goal': env.goal, 'shadow': env.shadow}], f)

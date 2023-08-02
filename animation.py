@@ -1,6 +1,7 @@
 import plotly.graph_objects as go
 import numpy as np
 import pickle as pk
+import config
 
 x0 = np.array([0, 0, 1, 1, 0, 0, 1, 1])
 y0 = np.array([0, 1, 1, 0, 0, 1, 1, 0])
@@ -164,15 +165,20 @@ def convert_path(goal, plan):
 
 
 if __name__ == '__main__':
+    arg = config.get_parser()
+    arg = arg.parse_args()
     high = True
     # high = False
+
     if high:
-        with open('result/high_action_5.pkl', 'rb') as f:
+        load_path = f'result/high_action_{arg.map}.pkl' if arg.map > 0 else 'result/high_action.pkl'
+        with open(load_path, 'rb') as f:
             plan, info = pk.load(f)
             goal = info['goal']
             h = np.max(goal)
     else:
-        with open('result/path.pkl', 'rb') as f:
+        load_path = f'result/path_{arg.map}.pkl' if arg.map > 0 else 'result/path.pkl'
+        with open(load_path, 'rb') as f:
             goal, plan = pk.load(f)
             h = np.max(goal) + 2
 

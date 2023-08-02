@@ -133,6 +133,7 @@ def detect_conflict(heights, t2hid, path1, path2, block_action1, block_action2):
             z1, z2 = path1[t][0][2], path2[t][0][2]
 
             if loc1[0] == -1 or loc2[0] == -1:
+                ploc1, ploc2 = loc1, loc2
                 continue
 
             if r == 0:
@@ -370,35 +371,13 @@ if __name__ == '__main__':
     env = lego.GridWorld(arg)
     env.set_mirror_map()
 
-    # env.height[1, 2] = 1
-    # env.height[2:4, 2] = 2
-    # positions = [(0, 1, 0), (1, 2, 1), (1, 5, 0)]
-    # goals = [(1, 3, 2, 2), (0, 2, 2, 1), (0, 1, 2, 0)]
-    # carry_stats = [True, False, False]
-
-    # env.height[1:3, 2] = 1
-    # env.height[3, 2:4] = 2
-    # env.height[3, 4] = 3
-    # positions = [(2, 2, 1), (0, 2, 0), (3, 3, 2)]
-    # goals = [(1, 3, 2, 2), (1, 2, 2, 1), (1, 3, 3, 2)]
-    # carry_stats = [False, True, False]
-
-    # env.height[3, 2:5] = 3
-    # env.height[4, 3] = 3
-    # env.height[1:3, 3] = 2
-    # env.height[1, 2] = 1
-    # positions = [(1, 2, 1), (0, 2, 0), (0, 1, 0)]
-    # goals = [(0, 1, 3, 1), (1, 2, 3, 2), (0, 1, 2, 0)]
-    # carry_stats = [False, False, False]
-
-    env.height[3, 2] = 3
-    env.height[3, 4] = 3
-    env.height[4, 3] = 3
-    env.height[1:4, 3] = 2
-    env.height[1, 2] = 1
-    positions = [(1, 2, 1), (2, 3, 2), (1, 1, 0)]
-    goals = [(0, 1, 3, 1), (1, 2, 3, 2), (1, 3, 3, 2)]
-    carry_stats = [False, False, True]
+    env.height[1, 1:3] = 1
+    env.height[2, 2] = 1
+    env.height[2, 3] = 3
+    env.height[3, 2:4] = 2
+    positions = [(3, 3, 2), (2, 2, 1), (4, 0, 0)]
+    goals = [(1, 2, 2, 1, 0), (1, 3, 3, 2, 0), (-1, -1, -1, -1, -1)]
+    carry_stats = [False, False, False]
 
 
     # profiler = cProfile.Profile()
