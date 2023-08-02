@@ -6,6 +6,7 @@ import heapq
 from itertools import count
 import time
 import A_star as astar
+import A_star_v2 as astar_planner
 
 class ActionDependencyGraph():
     def __init__(self, action_sequence):
@@ -57,7 +58,7 @@ class ActionDependencyGraph():
             if len(self.adg.pred[node]) == 0 and node != (-1, -1, -1, 0):
                 self.adg.add_edge((-1, -1, -1, 0), node)
     
-    def is_a_neighbour(self, a, b):
+    def is_a_neighbour(self, a, b):        
         if a[0] == b[0] and a[1] == b[1]+1:
             return True
         elif a[0] == b[0] and a[1] == b[1]-1:
@@ -74,7 +75,7 @@ class ActionDependencyGraph():
         # pos = nx.spring_layout(self.adg)
         print("Time to build Dependency Graph", time.time()-self.CPU_start_time)
         nx.draw(self.adg, pos, with_labels=True, font_weight='bold', node_size=1000, node_color='skyblue', edge_color='black', width=1.5, alpha=0.7)
-        plt.show()
+        # plt.show()
     
     # def get_all_dependencies(self, node):
     #     dependencies = []
@@ -85,7 +86,8 @@ class ActionDependencyGraph():
     #     return dependencies
 
 def main():
-    action_sequence = astar.main()
+    # action_sequence = astar.main()
+    action_sequence = astar_planner.main()
     graph = ActionDependencyGraph(action_sequence)
     return graph
 

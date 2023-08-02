@@ -8,6 +8,8 @@ import time
 import lego
 import config
 import min_spanning_tree 
+import pdb
+import heuristic_estimation
 
 '''
 Valid degree:
@@ -27,53 +29,17 @@ order_mode = 0
 arg = config.get_parser()
 arg = arg.parse_args()
 env = lego.GridWorld(arg)
-min_spanning_tree = min_spanning_tree.MinSpanningTree(env.goal)
+mst = min_spanning_tree.MinSpanningTree(env.goal)
 
 def heuristic(env, height, mode=0):
-    """
-    Calculate heuristic value for a given height map and a goal map
-    Mode 0: # of plan blocks not placed + # of scaffold blocks
-    Mode 1: # of plan blocks not placed + # of scaffold blocks + 2 * sum (goal value)
-    Notes:
-        Mode 1 and 2 only used for initial state
-    """
     if mode == 0:
         return np.abs(height - env.goal).sum()
     elif mode == 1:
-        # 1.0: only consider support at neighboring level (1-support)
-        # return np.abs(height - env.goal).sum() + 2 * env.get_goal_val_nb(height).sum()
-        # 1.1: consider support at all levels (d-support)
-        # return np.abs(height - env.goal).sum() + 2 * env.get_goal_val(height).sum()
-        # 1.2: consider d-support, and use goal groupings
         return np.abs(height - env.goal).sum() + 2 * env.get_goal_val_group(height).sum()
     else:
         raise NotImplementedError
 
-def heuristic_diff(env, loc, h, add, mode=0):
-    """Calculate difference of heuristic value after adding or removing a block"""
-    if add:
-        scaffold = h + 1 > env.goal[loc[0], loc[1]]
-    else:
-        scaffold = h > env.goal[loc[0], loc[1]]
-
-    if mode == 0:
-        if add and scaffold:
-            return 1
-        elif add and not scaffold:
-            return -1
-        elif not add and scaffold:
-            return -1
-        else:
-            return 1
-    else:
-        raise NotImplementedError
-
 def push_node(open_list, node, mode=0):
-    """
-    Push node to open list
-    Sort order (increasing):
-        Mode 0: f, h, gen_id
-    """
     f = node.g + node.h
     if mode == 0:
         heapq.heappush(open_list, (f, node.h, node.gen_id, node))
@@ -81,17 +47,12 @@ def push_node(open_list, node, mode=0):
         raise NotImplementedError
 
 def validate2(env, new_height, x, y, add, old_valid):
-    """
-    Validate a block action (incremental):
-        must exist a neighbor location with correct height, and is reachable before and after the action
-    """
     valid, new_valid = env.update_valid_map(new_height, x, y, old_valid, degree=valid_degree)
     if valid:
         valid = False
         h = new_height[x, y] - 1 if add else new_height[x, y] + 1
         for (x2, y2) in env.valid_neighbor[x, y]:
-            # x, y new location
-            if ((x, y), (x2, y2)) not in min_spanning_tree.edges and ((x2, y2), (x, y)) not in min_spanning_tree.edges:
+            if (((x, y), (x2, y2)) not in mst.edges and ((x2, y2), (x, y)) not in mst.edges) and env.goal[x,y]==0:
                 continue
             if add and new_height[x2, y2] == h and new_valid[0, x2, y2]:
                 valid = True
@@ -107,6 +68,7 @@ def get_plan(node):
         plan.append(node.height)
         node = node.parent
     print(f'Number of actions: {len(plan)-1}')
+    # print("plan: ", plan[::-1])
     return plan[::-1]
 
 def get_action(plan):
@@ -121,23 +83,16 @@ def get_action(plan):
     return actions
 
 def high_lv_plan():
-    """
-    A* search
-    Assumptions:
-        1. Node state is represented by height map
-        2. Heuristic value is determined by height map
-        3. Reaching a state sooner is better
-    """
     open_list = []
     closed_list = dict()  # key: (height, g), value: Node
 
     valid = env.valid_bfs_map(env.height, degree=valid_degree)
     root = Node(None, env.height, valid, 0, heuristic(env, env.height, mode=heu_mode), 0)
-    push_node(open_list, root,  mode=order_mode)
     
+    print(f'Initial heuristic: {root.h}')
+    push_node(open_list, root,  mode=order_mode)
     closed_list[root.height.tobytes()] = 0
     gen = expand = invalid = dup = dup2 = 0
-
     while len(open_list) > 0:
         node = heapq.heappop(open_list)[-1]
         expand += 1
@@ -171,26 +126,15 @@ def high_lv_plan():
                 if new_height_bytes in closed_list and new_g >= closed_list[new_height_bytes]:
                     dup += 1
                     continue
-                # Valid path detection: agent should have a way back
-                # valid, new_valid = validate(env, new_height, x, y, add)
                 valid, new_valid = validate2(env, new_height, x, y, add, node.valid)
                 if not valid:
                     invalid += 1
                     continue
-                # if edge not in spanning tree
-                    #continue
-                
                 '''Generate child node'''
                 gen += 1
                 # new_h = node.h + heuristic_diff(env, (x, y), node.height[x, y], add, mode=heu_mode)
                 new_h = heuristic(env, new_height, mode=heu_mode)
                 new_node = Node(node, new_height, new_valid, new_g, new_h, gen)
-                # Mark added scaffold (can only add once)
-                # if valid_degree == 3 and add and new_height[x, y] > env.goal[x, y]:
-                #     new_node.added_scaffold.add((new_height[x, y] - 1, x, y))
-                
-                # above code for the scaffold twice 
-
                 push_node(open_list, new_node, mode=order_mode)
                 closed_list[new_height_bytes] = new_g
 
@@ -207,18 +151,8 @@ class Node:
         self.gen_id = gen_id
 
 def main():
-    # lp = LineProfiler()
-    # lp_wrapper = lp(high_lv_plan)
-    # lp_wrapper(env)
-    # lp.print_stats()
-    # profiler = cProfile.Profile()
-    # profiler.enable()
-    # profiler.disable()
-    # stats = pstats.Stats(profiler).sort_stats('tottime')
-    # stats.print_stats()
     start_time = time.time()
     plan = high_lv_plan()
-    
     print(f'Time to find High Level Sol: {time.time() - start_time}')
     return plan
 
