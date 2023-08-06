@@ -72,19 +72,32 @@ def create_graph(env, actions):
                 ptr = j
                 break
 
-        '''2. Find precedence constraint with all leaf nodes before i and pointer'''
+        '''2. Recursively find precedence constraints, starting with all leaf nodes the pointer'''
         leaves = [j for j in range(ptr) if g.out_degree[nodes[j]] == 0]
-        for j in leaves:
-            # Height snapshot: right before i is executed, plus j is undone
-            height = undo(heights[i].copy(), actions[j])
-            valid = env.valid_bfs_map(height, degree=1)
-            if precedence(env, nodes[j], nodes[i], height, valid):
-                g.add_edge(nodes[j], nodes[i])
-                no_precedence = False
+        leaf_height = heights[i].copy()
+        temp_g = g.copy()
+        while len(leaves) > 0:
+            next_height = leaf_height.copy()
+            for j in leaves:
+                # Height snapshot: right before i is executed, plus j is undone
+                height = undo(leaf_height.copy(), actions[j])
+                valid = env.valid_bfs_map(height, degree=1)
+                # If precedence constraint exists, j is not a leaf node anymore
+                if precedence(env, nodes[j], nodes[i], height, valid):
+                    g.add_edge(nodes[j], nodes[i])
+                    no_precedence = False
+                    temp_g.add_edge(nodes[j], nodes[i])
+                # Otherwise, j is still a leaf node, but need to check with predecessors of j
+                else:
+                    temp_g.remove_node(nodes[j])
+                    next_height = undo(next_height, actions[j])
+            leaves = [j for j in range(ptr) if nodes[j] in temp_g.nodes and temp_g.out_degree[nodes[j]] == 0]
+            leaf_height = next_height
 
         '''3. No precedence constraint, connect to dummy source node'''
         if no_precedence:
             g.add_edge('S', new_node)
+
         heights[i + 1:, x, y] += 1 if add == 1 else -1  # Update height map
 
     return g
@@ -118,7 +131,7 @@ if __name__ == '__main__':
     stats = pstats.Stats(profiler).sort_stats('tottime')
     stats.print_stats(10)
 
-    # draw_graph(g)
+    draw_graph(g)
 
     save_path = f'result/dependency_{arg.map}.pkl' if arg.map > 0 else 'result/dependency.pkl'
     with open(save_path, 'wb') as f:
