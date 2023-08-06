@@ -21,8 +21,7 @@ Order mode:
 '''
 valid_degree = 1
 heu_mode = 1
-order_mode = 0
-# sym_mode = 1
+order_mode = 1
 
 
 '''Heuristic'''
@@ -104,6 +103,10 @@ def validate2(env, new_height, x, y, add, old_valid):
         must exist a neighbor location with correct height, and is reachable before and after the action
     """
     valid, new_valid = env.update_valid_map(new_height, x, y, old_valid, degree=valid_degree)
+    '''Also invalidate bad actions'''
+    if valid and ((new_height > env.goal) & np.logical_not(new_valid[0])).any():
+        valid = False
+    '''Check for a reachable neighbor of correct height'''
     if valid:
         valid = False
         h = new_height[x, y] - 1 if add else new_height[x, y] + 1
@@ -144,15 +147,17 @@ def status(env, height, world, valid, h_val):
     n_scaffold_addable = (scaffold_above & valid[1]).sum()
     scaffold_below = height > env.goal
     n_scaffold_removable = (scaffold_below & valid[2]).sum()
+    scaffold = scaffold_above | scaffold_below
+    n_scaffold_reachable = (scaffold & valid[0]).sum()
 
     '''Values'''
     v_shadow_scaffold = (scaffold_added * env.shadow_val).sum()
-    v_neighbor_scaffold = (scaffold_added * env.neighbor_val).sum()
     v_shadow_goal = (goal_added * env.shadow_val).sum()
-    v_neighbor_goal = (goal_added * env.neighbor_val).sum()
+    v_light_scaffold = (scaffold_added * env.light_val).sum()
+    v_light_goal = (goal_added * env.light_val).sum()
 
     return (n_goal_added, n_scaffold_added, n_goal_addable, n_goal_reachable, n_scaffold_addable, n_scaffold_removable,
-            h_val, v_shadow_scaffold, v_neighbor_scaffold, v_neighbor_goal)
+            n_scaffold_reachable, h_val, v_shadow_scaffold, v_light_scaffold)
 
 def detect_symmetry(env, closed_list, g, height, world, valid, h):
     key = status(env, height, world, valid, h)
@@ -169,8 +174,11 @@ def push_node(open_list, node, mode=0):
     """
     h = node.h
     f = node.g + h
+    goal_added = - node.info['world'][1].sum()
     if mode == 0:
         heapq.heappush(open_list, (f, h, node.gen_id, node))
+    elif mode == 1:
+        heapq.heappush(open_list, (f, h, goal_added, node.gen_id, node))
     else:
         raise NotImplementedError
 
@@ -245,7 +253,10 @@ def high_lv_plan(env, sym_mode=0):
                 closed_list[key] = new_g  # Save g value for duplicate detection
 
                 '''New heuristic value'''
-                new_info = update_scaffold_info(env, node.info, add, (x, y), z, new_world)
+                valid, new_info = update_scaffold_info(env, node.info, add, (x, y), z, new_world)
+                if not valid:
+                    invalid += 1
+                    continue
                 new_h = heuristic(env, new_height, mode=heu_mode, new_info=new_info)
 
                 '''Symmetry detection'''
@@ -298,15 +309,11 @@ if __name__ == '__main__':
     env.set_shadow(val=True)
     env.set_distance_map()
     env.set_support_map()
-
-    # lp = LineProfiler()
-    # lp_wrapper = lp(high_lv_plan)
-    # lp_wrapper(env)
-    # lp.print_stats()
+    env.set_light()
 
     profiler = cProfile.Profile()
     profiler.enable()
-    high_actions = high_lv_plan(env, sym_mode=1)
+    high_actions = high_lv_plan(env, sym_mode=0)
     profiler.disable()
     stats = pstats.Stats(profiler).sort_stats('tottime')
     stats.print_stats()

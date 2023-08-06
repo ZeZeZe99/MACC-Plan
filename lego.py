@@ -22,8 +22,8 @@ class GridWorld:
 
         # Plan
         self.map = arg.map
-        if self.w == 5:
-            self.goal_maps = np.clip(goal.GOAL_MAPS_5, 0, self.h - 1)
+        if self.w == 10:
+            self.goal_maps = np.clip(goal.GOAL_MAPS_10, 0, self.h - 1)
         elif self.w == 8:
             self.goal_maps = np.clip(goal.GOAL_MAPS_8, 0, self.h - 1)
         else:
@@ -82,14 +82,6 @@ class GridWorld:
         for (x, y) in self.valid_neighbor:
             self.valid_next_loc[(x, y)].append((x, y))
 
-        # Reachability map (expanded map)
-        self.reach = np.zeros((2 * self.w - 1, 2 * self.w - 1), dtype=np.int8)
-        self.valid_reach = set()
-        self.reach_neighbor = dict()
-        for x in range(2 * self.w - 1):
-            for y in range(2 * self.w - 1):
-                self.valid_reach.add((x, y))
-
         # Direction
         self.dir = [(-1, 0), (1, 0), (0, -1), (0, 1)]
 
@@ -130,13 +122,6 @@ class GridWorld:
                     self.shadow |= shadow
                     self.shadow_val += shadow
         self.shadow_height = np.sum(self.shadow, axis=0)
-        self.neighbor_val = np.zeros(self.world_shape3d, dtype=np.int8)
-        for x, y in self.valid_loc - self.border_loc:
-            for z in range(self.H):
-                v = 0
-                for x2, y2 in self.search_neighbor[(x, y)]:
-                    v += self.shadow_val[z, x2, y2]
-                self.neighbor_val[z, x, y] = v
 
         '''Filter only scaffold blocks'''
         self.scaf = self.shadow * (1 - self.goal3d)
@@ -269,19 +254,6 @@ class GridWorld:
                     reach.append((x3, y3))
         return True, valid_map
 
-    def update_reachable(self, reach, height, x, y):
-        h = height[x, y]
-        rx, ry = 2 * (x + 1) - 1, 2 * (y + 1) - 1
-        for dx, dy in self.dir:
-            x2, y2 = x + dx, y + dy
-            rx2, ry2 = rx + dx, ry + dy
-            h2 = height[x2, y2]
-            if abs(h - h2) <= 1:
-                reach[rx2, ry2] = 1
-            else:
-                reach[rx2, ry2] = 0
-        return reach
-
     '''Used for scaffold estimate'''
     def set_distance_map(self):
         """Get locations d distance away from the center (2D), d = 1, 2, ..., H-1"""
@@ -323,6 +295,31 @@ class GridWorld:
         right_s, right_d = min(self.w - 1, y + d + 1), d + 1 + min(d, self.w - y - 2)
         s_map[top_s:bottom_s, left_s:right_s] = d_map[top_d:bottom_d, left_d:right_d]
         return s_map
+
+    '''Symmetry detection'''
+    def set_light(self):
+        self.light_val = np.zeros(self.world_shape3d, dtype=np.int8)
+        for x, y in np.transpose(np.nonzero(self.shadow_val[0] > 1)):
+            if self.shadow_val[0, x, y] > self.shadow_val[1, x, y]:
+                light = self.cast_light(x, y) * (self.shadow_val[0, x, y] - 1)
+                self.light_val += light
+
+    def cast_light(self, x, y):
+        light = np.zeros(self.world_shape3d, dtype=np.int8)
+        light[-1] = self.find_d_support(x, y, self.H - 1) * self.goal3d[-1]
+        for z in range(self.H - 2, 0, -1):
+            light[z] = light[z + 1]
+            for sx, sy in np.transpose(np.nonzero(self.find_d_support(x, y, z))):
+                if self.goal3d[z, sx, sy] == 1:
+                    light[z, sx, sy] = 1
+                    continue
+                for nx, ny in self.search_neighbor[(sx, sy)]:
+                    if light[z + 1, nx, ny] == 1:
+                        light[z, sx, sy] = 1
+                        break
+        light[0] = light[1]
+        light[0, x, y] = 1
+        return light
 
     '''Low level search functions'''
     def set_mirror_map(self):
