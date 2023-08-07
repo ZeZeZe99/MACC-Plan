@@ -1,3 +1,7 @@
+import numpy as np
+from scipy.optimize import linear_sum_assignment
+
+from path_finding import distance2border, distance2neighbor, heuristic
 
 """
 Task selection methods
@@ -5,50 +9,166 @@ Method 1: Naive selection
     1) Select the first N tasks from the high-level plan
     2) Remove tasks that deal with the same block as another task
     3) Fill up the remaining tasks with dummy tasks
-Method 2: Dependency selection (1 level in a round)
-    1) Select the first N tasks from the current lowest level of the dependency graph
+Method 2: Dependency selection
+    1) Select the first N tasks from the current lowest k level of the dependency graph
     2) Fill up the remaining tasks with dummy tasks
-
 """
 
-def allocate(num, todo, assignment, mode=0):
-    if mode == 0:
-        return naive_allocation(num, todo, assignment)
-    elif mode == 1:
-        return dependency_allocation(num, todo, assignment)
 
-def assign_tasks(assignment, tasks, new_id):
+'''Select new tasks'''
+def select_tasks(assignment, g, k=1):
+    num = len(assignment)
+    assigned = [t for t in assignment if t is not None]
+    new_tasks, dep = dependency_selection(num, g, assigned, level=k)
+    dummy = num - len(assigned) - len(new_tasks)
+    return new_tasks, dep, dummy
+
+def dependency_selection(num, g, assigned, level=1):
+    assert level >= 0
+    tasks = assigned.copy()  # Assigned tasks
+
+    '''Find candidate tasks'''
+    temp_g = g.copy()
+    leaf_node = []
+    dep_lv_2_g, g_2_dep_lv, predecessors, successors, all_succ = {}, {}, {}, {}, {}
+    lv = 0
+    stop = 999 if level == 0 else level
+    while len(tasks) < num:
+        if lv == stop:
+            break
+        temp_g.remove_nodes_from(leaf_node)
+        leaf_node = [n for n in temp_g.nodes if temp_g.in_degree[n] == 0]  # Current leaf nodes
+        leaf_assigned = [n for n in leaf_node if n in tasks]
+        leaf_new = [n for n in leaf_node if n not in tasks]
+        '''If tasks at this level are more than required, select some of them'''
+        leaf_new = leaf_new[:min(len(leaf_new), num - len(tasks))]
+        leaf_selected = leaf_assigned + leaf_new
+        dep_lv_2_g[lv] = set(leaf_selected)
+        for n in leaf_selected:
+            g_2_dep_lv[n] = lv
+        lv += 1
+        tasks += leaf_selected
+
+    '''Record predecessors and successors of each task'''
+    max_lv = lv - 1
+    for lv in range(max_lv, -1, -1):
+        for n in dep_lv_2_g[lv]:
+            successors[n] = set([s for s in g.successors(n) if s in tasks])
+            all_succ[n] = successors[n]
+            for s in successors[n]:
+                all_succ[n] |= all_succ[s] if s in all_succ else set()
+            predecessors[n] = set([p for p in g.predecessors(n) if p in tasks])
+    predecessors[(-1, -1, -1, -1, -1)] = set()
+    successors[(-1, -1, -1, -1, -1)] = set()
+    all_succ[(-1, -1, -1, -1, -1)] = set()
+
+    new_tasks = [t for t in tasks if t not in assigned]
+    info = {'dep_lv_2_g': dep_lv_2_g, 'g_2_dep_lv': g_2_dep_lv, 'pred': predecessors, 'succ': successors,
+           'all_succ': all_succ}
+    return new_tasks, info
+
+
+'''Process task information'''
+def preprocess_tasks(tasks, info, env):
+    """Pre-process task information, assuming tasks are fixed"""
+    '''Mark possible heights for each x-y location'''
+    loc2height = dict()
+    for loc in env.valid_loc:
+        loc2height[loc] = {env.height[loc]}
+    for gadd, gx, gy, lv, _ in tasks:
+        if gadd == 1:
+            loc2height[gx, gy].add(lv + 1)
+        elif gadd == 0:
+            loc2height[gx, gy].add(lv)
+    '''Mark possible neighbors for each goal (where the agent can stand at while performing the goal action)'''
+    g2neighbor = dict()
+    for _, gx, gy, lv, _ in tasks:
+        if gx != -1:
+            g2neighbor[(gx, gy, lv)] = set()
+            for (nx, ny) in env.valid_neighbor[gx, gy]:
+                nzs = loc2height[(nx, ny)]
+                if lv in nzs:
+                    g2neighbor[(gx, gy, lv)].add((nx, ny, lv))
+    '''Pre-compute distance heuristic'''
+    info['d2border'] = distance2border(env, loc2height)
+    info['d2neighbor'] = distance2neighbor(env, loc2height, g2neighbor)
+    info['loc2height'] = loc2height
+    info['g2neighbor'] = g2neighbor
+
+def postprocess_tasks(info):
+    """Post-process task information, assuming tasks are assigned"""
+    tasks = info['goals']
+    '''Task index'''
+    info['id'] = dict()
     for i in range(len(tasks)):
-        assignment[new_id[i]] = tasks[i]
-    for i in range(len(assignment)):
-        if assignment[i] is None:
-            assignment[i] = (-1, -1, -1, -1, -1)
+        info['id'][tasks[i]] = i
+    '''Mark start stage for each agent'''
+    info['stage'] = dict()
+    for i in range(len(tasks)):
+        add = tasks[i][0]
+        carry = info['carry'][i]
+        if add < 0:
+            info['stage'][i] = 2  # No goal, go to border
+        elif add == carry:
+            info['stage'][i] = 1  # Can directly perform goal action
+        else:
+            info['stage'][i] = 0  # Need to go to border first
+
+
+'''Allocate tasks to agents'''
+def allocate_tasks(assignment, tasks, info, env, arg):
+    old_tasks = [t for t in assignment if t is not None]
+    preprocess_tasks(old_tasks + tasks, info, env)
+    if arg.allocate == 0:
+        assignment = naive_allocate(assignment, tasks)
+    elif arg.allocate == 1:
+        assignment = matching_allocate(assignment, tasks, info, env, arg)
+    else:
+        raise NotImplementedError
+    info['goals'] = assignment
+    postprocess_tasks(info)
+
+def naive_allocate(assignment, tasks):
+    """Naively assign tasks to agents in order"""
+    ids = [i for i in range(len(assignment)) if assignment[i] is None]
+    tid = 0
+    for i in range(len(ids)):
+        if tid < len(tasks):
+            assignment[ids[i]] = tasks[tid]
+            tid += 1
+        else:
+            assignment[ids[i]] = (-1, -1, -1, -1, -1)
     return assignment
 
-def naive_allocation(num, todo, assignment):
-    # Select candidate tasks
-    candidate = todo[:min(num, len(todo))]
-    # Delay a task if it deals with the same block as another task
-    tasks = []
-    for i in range(len(candidate)):
-        same_block = False
-        for j in range(i - 1):
-            if candidate[i][1:] == candidate[j][1:]:
-                same_block = True
-                break
-        if not same_block:
-            tasks.append(candidate[i])
-    # Append dummy tasks if there are fewer tasks than agents
-    num_dummy = num - len(tasks)
-    # Allocate tasks to agents
-    assignment = assign_tasks(assignment, tasks)
-    return assignment, num_dummy
+def matching_allocate(assignment, tasks, info, env, arg):
+    """Match tasks to agents based on cost estimation"""
+    ids = [i for i in range(len(assignment)) if assignment[i] is None]
+    if len(ids) > len(tasks):
+        tasks.append((-1, -1, -1, -1, -1))
+    costs = np.zeros((len(ids), len(tasks)), dtype=np.int8)
+    for aid in range(len(ids)):
+        for tid in range(len(tasks)):
+            costs[aid, tid] = estimate_cost(info, env, tasks[tid], aid, arg)
+    if len(ids) > len(tasks):
+        dummy_cost = np.tile(costs[:, -1:], (1, len(ids) - len(tasks)))
+        costs = np.concatenate((costs, dummy_cost), axis=1)
+        tasks += [(-1, -1, -1, -1, -1)] * (len(ids) - len(tasks))
+    row, col = linear_sum_assignment(costs)
+    for i in range(len(row)):
+        assignment[ids[row[i]]] = tasks[col[i]]
+    return assignment
 
-def dependency_allocation(num, g, assignment):
-    new_id = [i for i in range(num) if assignment[i] is None]
-    leaves = [n for n in g.nodes if g.in_degree[n] == 0]
-    candidates = [n for n in leaves if n not in assignment]
-    new_tasks = candidates[:min(len(new_id), len(candidates))]
-    assignment = assign_tasks(assignment, new_tasks, new_id)
-    num_dummy = num - len(new_tasks)
-    return assignment, num_dummy
+
+def estimate_cost(info, env, task, aid, arg):
+    x, y, z = info['pos'][aid]
+    carry = info['carry'][aid]
+    add, gx, gy, lv, _ = task
+    if add < 0:
+        stage = 2
+    elif add == carry:
+        stage = 1
+    else:
+        stage = 0
+    cost = heuristic(env, info, stage, x, y, z, gx, gy, lv, arg.heu, arg.teleport)[0]
+    return cost
+
