@@ -17,7 +17,7 @@ def undo(height, action):
         height[action[1], action[2]] += 1
     return height
 
-def precedence(env, a1, a2, height, valid):
+def precedence(env, a1, a2, height, valid, mode):
     """
     Action 1 and action 2 have precedence constraint if swapping them leads to error, e.g.,
         1) Action 1 and 2 are at the same x-y location, or
@@ -35,17 +35,17 @@ def precedence(env, a1, a2, height, valid):
     if not valid[2 - add2, x2, y2]:  # Action 2 is not in the valid map
         return True
     height_a2 = execute(height.copy(), (x2, y2), add2)
-    valid2, valid_a2 = validate2(env, height_a2, x2, y2, add2, valid)
+    valid2, valid_a2 = validate2(env, height_a2, x2, y2, add2, valid, mode)
     if not valid2:  # Does not exist a path back to border
         return True
     '''Check if executing action 1 after action 2 leads to error'''
     if not valid_a2[2 - add1, x1, y1]:  # Action 1 is not in the valid map
         return True
     height_a1 = execute(height_a2, (x1, y1), add1)
-    valid1 = validate2(env, height_a1, x1, y1, add1, valid_a2)[0]
+    valid1 = validate2(env, height_a1, x1, y1, add1, valid_a2, mode)[0]
     return not valid1
 
-def create_graph(env, actions):
+def create_graph(env, actions, arg):
     """Create a dependency graph for the given actions"""
     g = nx.DiGraph()
     nodes = []
@@ -61,12 +61,12 @@ def create_graph(env, actions):
         nodes.append(new_node)
         no_precedence = True
 
-        valids[i] = env.valid_bfs_map(heights[i], degree=1)
+        valids[i] = env.valid_bfs_map(heights[i], degree=arg.valid)
         '''1. Find precedence constraint with actions before i in reverse order (early stop)'''
         ptr = i - 1
         for j in range(i - 1, -1, -1):
             # Height snapshot: right before j is executed
-            if precedence(env, nodes[j], nodes[i], heights[j], valids[j]):
+            if precedence(env, nodes[j], nodes[i], heights[j], valids[j], arg.valid):
                 g.add_edge(nodes[j], nodes[i])
                 no_precedence = False
                 ptr = j
@@ -83,7 +83,7 @@ def create_graph(env, actions):
                 height = undo(leaf_height.copy(), actions[j])
                 valid = env.valid_bfs_map(height, degree=1)
                 # If precedence constraint exists, j is not a leaf node anymore
-                if precedence(env, nodes[j], nodes[i], height, valid):
+                if precedence(env, nodes[j], nodes[i], height, valid, arg.valid):
                     g.add_edge(nodes[j], nodes[i])
                     no_precedence = False
                     temp_g.add_edge(nodes[j], nodes[i])
@@ -111,8 +111,7 @@ def draw_graph(graph):
 
 
 if __name__ == '__main__':
-    arg = config.get_parser()
-    arg = arg.parse_args()
+    arg = config.process_config()
 
     env = lego.GridWorld(arg)
     load_path = f'result/high_action_{arg.map}.pkl' if arg.map > 0 else 'result/high_action.pkl'
@@ -125,7 +124,7 @@ if __name__ == '__main__':
     profiler = cProfile.Profile()
     profiler.enable()
 
-    g = create_graph(env, high_actions)
+    g = create_graph(env, high_actions, arg)
 
     profiler.disable()
     stats = pstats.Stats(profiler).sort_stats('tottime')

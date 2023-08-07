@@ -167,8 +167,7 @@ def convert_path(goal, plan):
 if __name__ == '__main__':
     arg = config.get_parser()
     arg = arg.parse_args()
-    high = True
-    # high = False
+    high = arg.high
 
     if high:
         load_path = f'result/high_action_{arg.map}.pkl' if arg.map > 0 else 'result/high_action.pkl'

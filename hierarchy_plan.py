@@ -7,10 +7,7 @@ import config
 from high_lv_astar import high_lv_plan
 from dependency import create_graph
 from cbs import cbs
-from task_allocation import allocate
-
-
-allocate_mode = 1
+from task_allocation import select_tasks, allocate_tasks
 
 def snapshot(path, carry, goal):
     """Convert (loc, action) to (loc, carry, goal)"""
@@ -25,27 +22,24 @@ def snapshot(path, carry, goal):
     return path, carry
 
 def plan():
-    if allocate_mode == 0:
-        todo = high_actions.copy()
-        total = len(todo)
-    elif allocate_mode == 1:
-        dg.remove_node('S')
-        todo = dg
-        total = len(dg.nodes)
-    else:
-        raise NotImplementedError
-
+    dg.remove_node('S')
+    total = len(dg.nodes)
     assignment = [None for _ in range(num)]
     full_paths = [[(positions[i], carry_stats[i], None)] for i in range(num)]
     finish = generate = expand = 0
 
     while finish < total:
-        assignment, num_dummy = allocate(num, todo, assignment, mode=allocate_mode)
-        paths, times, stat = cbs(env, assignment, positions, carry_stats)
+        if arg.reselect:
+            assignment = [None for _ in range(num)]
+        new_tasks, info, dummy = select_tasks(assignment, dg, k=1)
+        info['pos'] = positions
+        info['carry'] = carry_stats
+        allocate_tasks(assignment, new_tasks, info, env, arg)
+        paths, times, stat = cbs(env, info, arg)
         generate += stat[0]
         expand += stat[1]
         '''Determine execution length'''
-        if num - num_dummy < total - finish:  # There are tasks not assigned
+        if num - dummy < total - finish:  # There are tasks not assigned
             execute_t = len(paths[0])  # Execute until the assigned first task is finished
             for t in times:
                 if t > 0:
@@ -63,10 +57,7 @@ def plan():
                         env.height[x, y] += 1
                     else:
                         env.height[x, y] -= 1
-                    if allocate_mode == 0:
-                        todo.remove(assignment[i])
-                    else:
-                        todo.remove_node(assignment[i])
+                    dg.remove_node(assignment[i])
                     assignment[i] = None
                 elif times[i] == -1:
                     assignment[i] = None
@@ -84,8 +75,7 @@ def plan():
 
 
 if __name__ == '__main__':
-    arg = config.get_parser()
-    arg = arg.parse_args()
+    arg = config.process_config()
 
     env = lego.GridWorld(arg)
     env.set_mirror_map()
@@ -101,12 +91,13 @@ if __name__ == '__main__':
         env.set_shadow(val=True)
         env.set_distance_map()
         env.set_support_map()
-        high_actions = high_lv_plan(env)
+        env.set_light()
+        high_actions = high_lv_plan(env, arg)
         save_path = f'result/high_action_{arg.map}.pkl' if arg.map > 0 else 'result/high_action.pkl'
         with open(save_path, 'wb') as f:
             pk.dump([high_actions, {'goal': env.goal, 'shadow': env.shadow}], f)
         print(f'Number of actions: {len(high_actions)}')
-        dg = create_graph(env, high_actions)
+        dg = create_graph(env, high_actions, arg)
         save_path = f'result/dependency_{arg.map}.pkl' if arg.map > 0 else 'result/dependency.pkl'
         with open(save_path, 'wb') as f:
             pk.dump(dg, f)
@@ -119,7 +110,7 @@ if __name__ == '__main__':
             env.shadow = info['shadow']
             env.H = env.goal.max()
         print(f'Number of actions: {len(high_actions)}')
-        dg = create_graph(env, high_actions)
+        dg = create_graph(env, high_actions, arg)
         save_path = f'result/dependency_{arg.map}.pkl' if arg.map > 0 else 'result/dependency.pkl'
         with open(save_path, 'wb') as f:
             pk.dump(dg, f)

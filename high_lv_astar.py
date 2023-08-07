@@ -19,13 +19,10 @@ Heuristic mode:
 Order mode:
     0: f -> h -> generation order
 '''
-valid_degree = 1
-heu_mode = 1
-order_mode = 1
 
 
 '''Heuristic'''
-def heuristic(env, height, mode=0, new_info=None):
+def heuristic(env, height, mode=1, new_info=None):
     """
     Calculate heuristic value for a given height map and a goal map
     Mode 0: # of plan blocks not placed + # of scaffold blocks
@@ -48,36 +45,6 @@ def heuristic(env, height, mode=0, new_info=None):
     else:
         raise NotImplementedError
 
-# def heuristic_diff(add, loc, goal, new_height, new_info, mode=0):
-#     """Calculate difference of heuristic value after adding or removing a block"""
-#     h = new_height[loc]
-#     if add:
-#         scaffold = h > goal[loc]
-#     else:
-#         scaffold = h >= goal[loc]
-#
-#     if mode == 0:
-#         if add and scaffold:
-#             return 1
-#         elif add and not scaffold:
-#             return -1
-#         elif not add and scaffold:
-#             return -1
-#         else:
-#             return 1
-#     elif mode == 1:
-#         if add and scaffold:
-#             h_diff = 1
-#         elif add and not scaffold:
-#             h_diff = -1
-#         elif not add and scaffold:
-#             h_diff = -1
-#         else:
-#             h_diff = 1
-#         h_diff += 2 * env.update_goal_val(new_info)
-#     else:
-#         raise NotImplementedError
-
 
 '''Validation'''
 def validate(env, new_height, x, y, add):
@@ -85,7 +52,7 @@ def validate(env, new_height, x, y, add):
     Validate a block action:
         must exist a neighbor location with correct height, and is reachable before and after the action
     """
-    new_valid = env.valid_bfs_map(new_height, degree=valid_degree)
+    new_valid = env.valid_bfs_map(new_height, degree=arg.valid)
     h = new_height[x, y] - 1 if add else new_height[x, y] + 1
     valid = False
     for (x2, y2) in env.valid_neighbor[x, y]:
@@ -97,12 +64,12 @@ def validate(env, new_height, x, y, add):
             break
     return valid, new_valid
 
-def validate2(env, new_height, x, y, add, old_valid):
+def validate2(env, new_height, x, y, add, old_valid, mode):
     """
     Validate a block action (incremental):
         must exist a neighbor location with correct height, and is reachable before and after the action
     """
-    valid, new_valid = env.update_valid_map(new_height, x, y, old_valid, degree=valid_degree)
+    valid, new_valid = env.update_valid_map(new_height, x, y, old_valid, degree=mode)
     '''Also invalidate bad actions'''
     if valid and ((new_height > env.goal) & np.logical_not(new_valid[0])).any():
         valid = False
@@ -182,7 +149,7 @@ def push_node(open_list, node, mode=0):
     else:
         raise NotImplementedError
 
-def high_lv_plan(env, sym_mode=0):
+def high_lv_plan(env, arg):
     """
     A* search
     Assumptions:
@@ -194,15 +161,15 @@ def high_lv_plan(env, sym_mode=0):
     closed_list = dict()  # key: (height, g), value: Node
     closed_stat = dict()
 
-    valid = env.valid_bfs_map(env.height, degree=valid_degree)
+    valid = env.valid_bfs_map(env.height, degree=arg.valid)
     root_info = init_scaffold_info(env, env.height)
-    root_h = heuristic(env, env.height, mode=heu_mode, new_info=root_info)
+    root_h = heuristic(env, env.height, mode=arg.high_heu, new_info=root_info)
     root = Node(None, env.height, valid, 0, root_h, 0, root_info)
-    push_node(open_list, root,  mode=order_mode)
+    push_node(open_list, root,  mode=arg.high_order)
     gen = expand = invalid = dup = dup2 = 0
 
     closed_list[root.height.tobytes()] = 0
-    if sym_mode == 1:
+    if arg.symmetry == 1:
         stat = status(env, env.height, root_info['world'], valid, root_h)
         closed_stat[stat] = 0
 
@@ -227,7 +194,7 @@ def high_lv_plan(env, sym_mode=0):
                 if not node.valid[a, x, y]:
                     continue
                 # Skip removing goal blocks
-                if valid_degree == 2 and not add and node.height[x, y] <= env.goal[x, y]:
+                if arg.valid == 2 and not add and node.height[x, y] <= env.goal[x, y]:
                     continue
 
                 '''Execute action'''
@@ -246,7 +213,7 @@ def high_lv_plan(env, sym_mode=0):
                     continue
 
                 '''2nd round action validation: agent should have a way back'''
-                valid, new_valid = validate2(env, new_height, x, y, add, node.valid)
+                valid, new_valid = validate2(env, new_height, x, y, add, node.valid, arg.valid)
                 if not valid:
                     invalid += 1
                     continue
@@ -257,10 +224,10 @@ def high_lv_plan(env, sym_mode=0):
                 if not valid:
                     invalid += 1
                     continue
-                new_h = heuristic(env, new_height, mode=heu_mode, new_info=new_info)
+                new_h = heuristic(env, new_height, mode=arg.high_heu, new_info=new_info)
 
                 '''Symmetry detection'''
-                if sym_mode == 1:
+                if arg.symmetry == 1:
                     duplicate, key = detect_symmetry(env, closed_stat, new_g, new_height, new_world, new_valid, new_h)
                     if duplicate:
                         dup2 += 1
@@ -270,7 +237,7 @@ def high_lv_plan(env, sym_mode=0):
                 '''Generate child node'''
                 gen += 1
                 new_node = Node(node, new_height, new_valid, new_g, new_h, gen, new_info)
-                push_node(open_list, new_node, mode=order_mode)
+                push_node(open_list, new_node, mode=arg.high_order)
 
     raise ValueError('No solution found')
 
@@ -301,8 +268,7 @@ class Node:
 
 
 if __name__ == '__main__':
-    arg = config.get_parser()
-    arg = arg.parse_args()
+    arg = config.process_config()
 
     env = lego.GridWorld(arg)
     env.set_goal()
@@ -313,7 +279,7 @@ if __name__ == '__main__':
 
     profiler = cProfile.Profile()
     profiler.enable()
-    high_actions = high_lv_plan(env, sym_mode=0)
+    high_actions = high_lv_plan(env, arg)
     profiler.disable()
     stats = pstats.Stats(profiler).sort_stats('tottime')
     stats.print_stats()

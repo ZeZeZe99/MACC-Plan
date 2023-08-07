@@ -17,7 +17,7 @@ def find_groups(env, height):
         for x in range(1, env.w - 1):
             for y in range(1, env.w - 1):
                 if workspace[x, y] > 0:
-                    g_map = np.zeros((env.w, env.w), dtype=np.int32)
+                    g_map = np.zeros((env.w, env.w), dtype=np.int8)
                     connect_goals(env, workspace, x, y, g_map, val=1)
                     group_map += g_map * gid
                     gid += 1
@@ -149,7 +149,7 @@ def update_group(env, info, add, loc, z):
         new_id = group_map.max() + 1
         group_map[loc] = 0
         for nx, ny in env.search_neighbor[loc]:
-            g_map = np.zeros((env.w, env.w), dtype=np.int32)
+            g_map = np.zeros((env.w, env.w), dtype=np.int8)
             if group_map[nx, ny] == gid:
                 connect_goals(env, group_map, nx, ny, g_map, val=gid)
                 if np.any(group_map == gid):  # Has another part with value gid

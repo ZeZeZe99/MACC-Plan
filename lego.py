@@ -17,7 +17,7 @@ class GridWorld:
         self.h = arg.h
         self.w = arg.w
         self.world_shape = (self.w, self.w)
-        self.height = np.zeros(self.world_shape, dtype=np.int32)
+        self.height = np.zeros(self.world_shape, dtype=np.int8)
         self._set_world()
 
         # Plan
@@ -39,7 +39,7 @@ class GridWorld:
                 self.valid_loc.add((i, j))
 
         # Border: cannot place blocks
-        self.border = np.zeros(self.world_shape, dtype=np.int32)
+        self.border = np.zeros(self.world_shape, dtype=np.int8)
         self.border[0, :] = 1
         self.border[-1, :] = 1
         self.border[:, 0] = 1
@@ -91,7 +91,7 @@ class GridWorld:
         if self.map == -1:
             self.goal = self.random_goal()
         else:
-            self.goal = np.array(self.goal_maps[self.map], dtype=np.int32)
+            self.goal = np.array(self.goal_maps[self.map], dtype=np.int8)
         self.goal_total = self.goal.sum()
         self.H = np.amax(self.goal)
         self.world_shape3d = (self.H, *self.world_shape)
@@ -101,7 +101,7 @@ class GridWorld:
 
     def random_goal(self):
         while True:
-            goal = np.random.randint(0, self.h, size=self.world_shape, dtype=np.int32)
+            goal = np.random.randint(0, self.h, size=self.world_shape, dtype=np.int8)
             goal *= (1 - self.border)
             if (goal > 0).any():
                 break
@@ -139,8 +139,8 @@ class GridWorld:
     '''Validation'''
     def valid_bfs_map(self, height, degree):
         reachable = self.border.copy()
-        addable = np.zeros(self.world_shape, dtype=np.int32)
-        removable = np.zeros(self.world_shape, dtype=np.int32)
+        addable = np.zeros(self.world_shape, dtype=np.int8)
+        removable = np.zeros(self.world_shape, dtype=np.int8)
 
         queue = deque()
         visited = set()
@@ -259,7 +259,7 @@ class GridWorld:
         """Get locations d distance away from the center (2D), d = 1, 2, ..., H-1"""
         maps = []
         for d in range(1, self.H):
-            d_map = np.zeros((2*d+1, 2*d+1), dtype=np.int32)
+            d_map = np.zeros((2*d+1, 2*d+1), dtype=np.int8)
             i = j = d
             for dx in range(-d, d + 1):
                 x = i + dx
@@ -269,7 +269,7 @@ class GridWorld:
             if d <= 2:
                 maps.append(d_map)
             else:
-                d_map[2:-2, 2:-2] = maps[-2]
+                d_map[2:-2, 2:-2] |= maps[-2]
                 maps.append(d_map)
         self.distance_map = maps
 
@@ -288,7 +288,7 @@ class GridWorld:
         Equivalently, find the d-support goal of the scaffold at (x, y) (d distance away, d levels above)
         """
         d_map = self.distance_map[d - 1]
-        s_map = np.zeros((self.w, self.w), dtype=np.int32)
+        s_map = np.zeros((self.w, self.w), dtype=np.int8)
         top_s, top_d = max(1, x - d), max(d - x + 1, 0)
         bottom_s, bottom_d = min(self.w - 1, x + d + 1), d + 1 + min(d, self.w - x - 2)
         left_s, left_d = max(1, y - d), max(d - y + 1, 0)
