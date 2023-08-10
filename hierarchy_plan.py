@@ -1,6 +1,7 @@
 import pickle as pk
 import cProfile
 import pstats
+import time
 
 import lego
 import config
@@ -29,17 +30,18 @@ def plan():
     finish = generate = expand = 0
 
     while finish < total:
-        if arg.reselect:
-            assignment = [None for _ in range(num)]
-        new_tasks, info, dummy = select_tasks(assignment, dg, k=1)
+        assigned = [] if arg.reselect else [t for t in assignment if t is not None]
+        new_tasks, info = select_tasks(num, assigned, dg, k=arg.k)
+        last_round = len(assigned) + len(new_tasks) == total - finish
+
         info['pos'] = positions
         info['carry'] = carry_stats
-        allocate_tasks(assignment, new_tasks, info, env, arg)
-        paths, times, stat = cbs(env, info, arg)
+        assignment = allocate_tasks(assignment, new_tasks, info, env, arg)
+        paths, times, stat = cbs(env, info, arg, last_round)
         generate += stat[0]
         expand += stat[1]
         '''Determine execution length'''
-        if num - dummy < total - finish:  # There are tasks not assigned
+        if not last_round:  # There are tasks not assigned
             execute_t = len(paths[0])  # Execute until the assigned first task is finished
             for t in times:
                 if t > 0:
@@ -50,7 +52,9 @@ def plan():
                 full_paths[i] += executed
                 positions[i] = executed[-1][0]
                 carry_stats[i] = carry
-                if times[i] == execute_t:
+                if times[i] == -1:
+                    assignment[i] = None
+                elif times[i] == execute_t:
                     finish += 1
                     add, x, y, lv, _ = assignment[i]
                     if add:
@@ -58,8 +62,6 @@ def plan():
                     else:
                         env.height[x, y] -= 1
                     dg.remove_node(assignment[i])
-                    assignment[i] = None
-                elif times[i] == -1:
                     assignment[i] = None
         else:  # All tasks are assigned
             for i in range(num):
@@ -79,12 +81,20 @@ if __name__ == '__main__':
 
     env = lego.GridWorld(arg)
     env.set_mirror_map()
-    positions = [(0, 1, 0), (0, 2, 0), (0, 3, 0)]
-    carry_stats = [True, True, True]
+    if arg.teleport:
+        positions = [(-1, -1, -1) for _ in range(arg.num)]
+    else:
+        positions = list(env.border_loc)[:arg.num]
+        positions = [(x, y, 0) for x, y in positions]
+    carry_stats = [True for _ in range(arg.num)]
     num = min(arg.num, len(positions))
 
     profiler = cProfile.Profile()
-    profiler.enable()
+    start = 0
+    if arg.profile:
+        profiler.enable()
+    else:
+        start = time.time()
 
     if arg.start == 0:  # Generate high-level plan
         env.set_goal()
@@ -122,23 +132,25 @@ if __name__ == '__main__':
 
     paths, stat = plan()
 
-    profiler.disable()
-    stats = pstats.Stats(profiler).sort_stats('tottime')
-    stats.print_stats(20)
+    if arg.profile:
+        profiler.disable()
+        stats = pstats.Stats(profiler).sort_stats('tottime')
+        stats.print_stats(20)
+    else:
+        print(f'Time: {time.time() - start:.3f} s')
 
     sum_of_cost = 0
     for path in paths:
-        for t in range(len(path) - 1, -1, -1):
-            if path[t][2] is not None:
-                sum_of_cost += t
-                break
-    fuel = 0
-    for path in paths:
-        for t in range(len(path) - 1):
-            if path[t][0] != path[t + 1][0] or path[t][1] != path[t + 1][1]:
-                fuel += 1
+        for t in range(len(path)):
+            if path[t][0] != (-1, -1, -1):
+                sum_of_cost += 1
+    # fuel = 0
+    # for path in paths:
+    #     for t in range(len(path) - 1):
+    #         if path[t][0] != path[t + 1][0] or path[t][1] != path[t + 1][1]:
+    #             fuel += 1
 
-    print(f'Makespan: {len(paths[0])-1}, Sum of cost: {sum_of_cost}, Fuel: {fuel}')
+    print(f'Makespan: {len(paths[0])-1}, Sum of cost: {sum_of_cost}')
     print(f'Generate: {stat[0]}, Expand: {stat[1]}')
 
     save_path = f'result/path_{arg.map}.pkl' if arg.map > 0 else 'result/path.pkl'

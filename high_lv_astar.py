@@ -142,10 +142,15 @@ def push_node(open_list, node, mode=0):
     h = node.h
     f = node.g + h
     goal_added = - node.info['world'][1].sum()
+    add, _, _, z = node.action
     if mode == 0:
         heapq.heappush(open_list, (f, h, node.gen_id, node))
     elif mode == 1:
         heapq.heappush(open_list, (f, h, goal_added, node.gen_id, node))
+    elif mode == 2:
+        heapq.heappush(open_list, (f, h, goal_added, z, node.gen_id, node))
+    elif mode == 3:
+        heapq.heappush(open_list, (f, h, -add, add * z, (add - 1) * z, goal_added, node.gen_id, node))
     else:
         raise NotImplementedError
 
@@ -236,7 +241,8 @@ def high_lv_plan(env, arg):
 
                 '''Generate child node'''
                 gen += 1
-                new_node = Node(node, new_height, new_valid, new_g, new_h, gen, new_info)
+                action = (int(add), x, y, z)
+                new_node = Node(node, new_height, new_valid, new_g, new_h, gen, new_info, action)
                 push_node(open_list, new_node, mode=arg.high_order)
 
     raise ValueError('No solution found')
@@ -257,7 +263,7 @@ def get_plan(node):
     return actions
 
 class Node:
-    def __init__(self, parent, height, valid, g_val, h_val, gen_id, info):
+    def __init__(self, parent, height, valid, g_val, h_val, gen_id, info, action=(-1, -1, -1, -1)):
         self.parent = parent
         self.height = height
         self.valid = valid
@@ -265,6 +271,7 @@ class Node:
         self.h = h_val
         self.gen_id = gen_id
         self.info = info
+        self.action = action
 
 
 if __name__ == '__main__':

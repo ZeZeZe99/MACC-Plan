@@ -16,12 +16,9 @@ Method 2: Dependency selection
 
 
 '''Select new tasks'''
-def select_tasks(assignment, g, k=1):
-    num = len(assignment)
-    assigned = [t for t in assignment if t is not None]
+def select_tasks(num, assigned, g, k=1):
     new_tasks, dep = dependency_selection(num, g, assigned, level=k)
-    dummy = num - len(assigned) - len(new_tasks)
-    return new_tasks, dep, dummy
+    return new_tasks, dep
 
 def dependency_selection(num, g, assigned, level=1):
     assert level >= 0
@@ -47,16 +44,17 @@ def dependency_selection(num, g, assigned, level=1):
         for n in leaf_selected:
             g_2_dep_lv[n] = lv
         lv += 1
-        tasks += leaf_selected
+        tasks += leaf_new
 
     '''Record predecessors and successors of each task'''
     max_lv = lv - 1
     for lv in range(max_lv, -1, -1):
         for n in dep_lv_2_g[lv]:
             successors[n] = set([s for s in g.successors(n) if s in tasks])
-            all_succ[n] = successors[n]
+            all_succ[n] = set()
             for s in successors[n]:
                 all_succ[n] |= all_succ[s] if s in all_succ else set()
+            all_succ[n] |= successors[n]
             predecessors[n] = set([p for p in g.predecessors(n) if p in tasks])
     predecessors[(-1, -1, -1, -1, -1)] = set()
     successors[(-1, -1, -1, -1, -1)] = set()
@@ -120,16 +118,19 @@ def allocate_tasks(assignment, tasks, info, env, arg):
     old_tasks = [t for t in assignment if t is not None]
     preprocess_tasks(old_tasks + tasks, info, env)
     if arg.allocate == 0:
-        assignment = naive_allocate(assignment, tasks)
+        assignment = naive_allocate(assignment, tasks, arg)
     elif arg.allocate == 1:
         assignment = matching_allocate(assignment, tasks, info, env, arg)
     else:
         raise NotImplementedError
     info['goals'] = assignment
     postprocess_tasks(info)
+    return assignment
 
-def naive_allocate(assignment, tasks):
+def naive_allocate(assignment, tasks, arg):
     """Naively assign tasks to agents in order"""
+    if arg.reselect:
+        assignment = [None for _ in range(len(assignment))]
     ids = [i for i in range(len(assignment)) if assignment[i] is None]
     tid = 0
     for i in range(len(ids)):
@@ -137,18 +138,24 @@ def naive_allocate(assignment, tasks):
             assignment[ids[i]] = tasks[tid]
             tid += 1
         else:
-            assignment[ids[i]] = (-1, -1, -1, -1, -1)
+            aid = ids[i]
+            assignment[aid] = (-1, -1, -1, -1, -1)
     return assignment
 
 def matching_allocate(assignment, tasks, info, env, arg):
     """Match tasks to agents based on cost estimation"""
+    prev = assignment.copy()
+    if arg.reselect:
+        assignment = [None] * len(assignment)
     ids = [i for i in range(len(assignment)) if assignment[i] is None]
     if len(ids) > len(tasks):
         tasks.append((-1, -1, -1, -1, -1))
-    costs = np.zeros((len(ids), len(tasks)), dtype=np.int8)
+    costs = np.zeros((len(ids), len(tasks)), dtype=np.float16)
     for aid in range(len(ids)):
         for tid in range(len(tasks)):
             costs[aid, tid] = estimate_cost(info, env, tasks[tid], aid, arg)
+            if prev[aid] is not None and prev[aid] == tasks[tid]:
+                costs[aid, tid] -= 0.5
     if len(ids) > len(tasks):
         dummy_cost = np.tile(costs[:, -1:], (1, len(ids) - len(tasks)))
         costs = np.concatenate((costs, dummy_cost), axis=1)
@@ -157,7 +164,6 @@ def matching_allocate(assignment, tasks, info, env, arg):
     for i in range(len(row)):
         assignment[ids[row[i]]] = tasks[col[i]]
     return assignment
-
 
 def estimate_cost(info, env, task, aid, arg):
     x, y, z = info['pos'][aid]
@@ -169,6 +175,5 @@ def estimate_cost(info, env, task, aid, arg):
         stage = 1
     else:
         stage = 0
-    cost = heuristic(env, info, stage, x, y, z, gx, gy, lv, arg.heu, arg.teleport)[0]
+    cost = heuristic(env, info, stage, x, y, z, gx, gy, lv, arg.heu, arg.teleport)[1]
     return cost
-

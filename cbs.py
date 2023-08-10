@@ -37,13 +37,15 @@ Approach
         4) Always exists, from the high-level plan
 
 Cost mode
-    0: Flow time = Σ time to finish all tasks, ignoring dummy paths
-    1: Fuel cost = Σ fuel consumption to finish all tasks, ignoring dummy paths
+    0: Flow time = Σ time to finish tasks, ignoring dummy paths
+    1: Makespan = max time to finish tasks, ignoring dummy paths
+    2: Makespan = min time to finish tasks (early rounds) and max time to return to parking location (last round)
 
 Conflict detect order
-    0: default, order = time, conflict type (edge-block, vertex, edge, block-block, agent-block, level)
+    0: default, order = time, conflict type (level, edge-block, agent-block, vertex, edge, block-block)
     1: level first, order = (level), (edge-block, agent-block, vertex, edge, block-block), each group sorted by time
     2: level and block first, order = (level, edge-block, agent-block), (vertex, edge, block-block)
+    3: block first, order = (edge-block, agent-block), (level), (vertex, edge, block-block)
 
 Conflict resolve order (several conflicts, each between 2 paths, choose which one to resolve)
     0: default order, use agent index
@@ -57,6 +59,7 @@ Conflict resolve order (several conflicts, each between 2 paths, choose which on
 '''Path processing'''
 def insert_stays(goal_info, paths, times, goal=None):
     """Insert stay actions to make all paths 'in-order' (meet the goal ordering)"""
+    # TODO: insert out-of-world stay actions when possible?
     if goal is None:
         lv = 1
         while lv in goal_info['dep_lv_2_g']:
@@ -71,6 +74,7 @@ def insert_stays(goal_info, paths, times, goal=None):
                     stay = (path[t_g][0], 'move')
                     paths[gid] = path[:t_g] + [stay] * (t_pred - t_g + 1) + path[t_g:]
                     times[gid] = t_pred + 1
+            lv += 1
     else:
         affected_goals = [goal] if goal[0] > 0 else []
         while len(affected_goals) > 0:
@@ -124,8 +128,8 @@ def detect_conflict(heights, t2hid, path1, path2, block_action1, block_action2, 
     t2, (add2, gx2, gy2, lv2, _) = block_action2
     gloc1, gloc2 = (gx1, gy1), (gx2, gy2)
 
-    for r in range(2):
-        if r == 1 and mode == 0:
+    for r in range(3):
+        if (r == 1 and mode == 0) or (r == 2 and mode < 3):
             break
         ploc1, ploc2 = path1[0][0][:2], path2[0][0][:2]
         for t in range(1, len(path1)):
@@ -137,14 +141,14 @@ def detect_conflict(heights, t2hid, path1, path2, block_action1, block_action2, 
                 ploc1, ploc2 = loc1, loc2
                 continue
 
-            if r == 0:
+            if (r == 0 and mode < 3) or (r == 1 and mode == 3):
                 # Level conflict (agent's z level doesn't match the height, due to the other agent's block action)
                 if gloc1 == loc2 and height[loc2] != z2 and (lv1 == z2 or lv1 == z2 - 1):
                     return {'type': 'level', 'time': t, 'loc': (loc2, z2), 'block': 1, 'block_t': t1, 't': min(t, t1)}
                 if gloc2 == loc1 and height[loc1] != z1 and (lv2 == z1 or lv2 == z1 - 1):
                     return {'type': 'level', 'time': t, 'loc': (loc1, z1), 'block': 2, 'block_t': t2, 't': min(t, t2)}
 
-            if (r == 0 and mode in [0, 2]) or (r == 1 and mode == 1):
+            if (r == 0 and mode in [0, 2, 3]) or (r == 1 and mode == 1):
                 # Edge-block conflict: a1 moves from A to B, while a2 performs block action from B to A
                 if t == t1 and gloc1 == ploc2 and loc1 == loc2:
                     return {'type': 'edge-block', 'time': t, 'loc': (loc1, gloc1), 'block': 1, 't': t}
@@ -167,7 +171,7 @@ def detect_conflict(heights, t2hid, path1, path2, block_action1, block_action2, 
                     if gloc2 == loc1:
                         return {'type': 'agent-block', 'time': t, 'loc': gloc2, 'block': 2, 'move': 'arrive', 't': t}
 
-            if (r == 0 and mode == 0) or (r == 1 and mode != 0):
+            if (r == 0 and mode == 0) or (r == 1 and 1 <= mode <= 2) or (r == 2 and mode == 3):
                 # Vertex conflict
                 if loc1 == loc2:
                     return {'type': 'vertex', 'time': t, 'loc': loc1, 't': t}
@@ -249,16 +253,32 @@ def resolve_conflict(conflict):
         raise Exception('Invalid conflict type')
     return cons1, cons2
 
-def compute_cost(block_actions, mode):
+def compute_cost(paths, block_actions, mode, last_round):
     """
     Compute the cost of a sequence of block actions
     Mode 0: cost = flow time = sum of time steps until goal (do not count dummy path)
-    Mode 1: cost = fuel use = sum of active actions until goal (do not count dummy path, do not count stay action)
+    Mode 1: cost = makespan = max of time steps until goal (do not count dummy path)
+    Mode 2: cost = makespan = min of time steps until goal, except for last round (use mode 1)
+    Mode 3: cost = (mode 2, mode 1)
     """
     if mode == 0:
         cost = 0
         for t, _ in block_actions:
             cost += t
+    elif mode == 1:
+        cost = 0
+        for t, _ in block_actions:
+            cost = max(cost, t)
+    elif mode == 2:
+        if last_round:
+            cost = 0
+            for p in paths:
+                cost = max(cost, len(p))
+        else:
+            cost = float('inf')
+            for t, _ in block_actions:
+                if t > 0:
+                    cost = min(cost, t)
     else:
         raise NotImplementedError
     return cost
@@ -286,7 +306,7 @@ def push_node(open_list, node):
     """Push a node into the open list. Order = cost, # conflicts, gen_id"""
     heapq.heappush(open_list, (node.cost, len(node.conflicts), node.gen_id, node))
 
-def cbs(env, goal_info, arg):
+def cbs(env, goal_info, arg, last_round):
     height = env.height
     num = len(goal_info['goals'])
     limit = env.w * env.w
@@ -302,7 +322,7 @@ def cbs(env, goal_info, arg):
     extend_paths(paths, window)
     block_actions = [(times[i], goal_info['goals'][i]) for i in range(num)]
     root = Node(paths, times, block_actions, set(), 0)
-    root.cost = compute_cost(block_actions, arg.cost)
+    root.cost = compute_cost(paths, block_actions, arg.cost, last_round)
     root.conflicts = detect_all_conflicts(height, paths, block_actions, arg.detect, arg.priority)
 
     open_list = []
@@ -343,7 +363,7 @@ def cbs(env, goal_info, arg):
                 window = max([len(p) for p in child.paths])
                 extend_paths(child.paths, window)
                 child.block_actions = [(child.times[i], goal_info['goals'][i]) for i in range(num)]
-                child.cost = compute_cost(child.block_actions, arg.cost)
+                child.cost = compute_cost(child.paths, child.block_actions, arg.cost, last_round)
                 child.conflicts = detect_all_conflicts(height, child.paths, child.block_actions, arg.detect, arg.priority)
 
                 # TODO: duplicate detection

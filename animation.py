@@ -9,7 +9,7 @@ z0 = np.array([0, 0, 0, 0, 1, 1, 1, 1])
 
 block_color = {
     0: ['white', 0],         # air
-    1: ['cyan', .3],         # unplaced goal block
+    1: ['lavender', .3],     # unplaced goal block
     2: ['royalblue', 1],     # placed goal block
     3: ['red', .7],          # scaffold block
     4: ['black', 1],         # agent

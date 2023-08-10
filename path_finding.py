@@ -5,23 +5,25 @@ import numpy as np
 """
 Low level A* search to plan a single agent path in 3D space to
     1) finish goal
-    2) return to border (parking location)
+    2) return to parking location
 
 A* ordering mode
     0: order = -stage, f, h 
         Favors reaching later stages earlier, similar to multi-step A* with back-track
         h = cost to goal of current stage
     1: order = f, h
-        Favors finishing goal and returning to border earlier, similar to multi-label A*
-        h = cost to goal then back to border
+        Favors parking earlier, similar to multi-label A*
+        h = cost to goal then back to park location
     2: order = f, h, h2g, (fuel)
         Similar to 1, favors finishing goal earlier (2nd)
-        h = cost to goal then back to border, h2g = cost to goal
+        h = cost to goal then back to park location, h2g = cost to goal
     3: order = f, h2g, h, (fuel)
-        Favors finishing goal earlier, then favors returning to border earlier
+        Favors finishing goal earlier (1st), then parking earlier (2nd)
     4: order = f, collision, h, h2g, (fuel)
-        Favors fewer collisions (1st), returning to border earlier (2nd), finishing goal earlier (3rd)
+        Favors fewer collisions (1st), parking earlier (2nd), finishing goal earlier (3rd)
         collision = # collisions with existing paths
+    5: order = f, collision, h, h2g, in_world, (fuel)
+        Similar to 4, favors less in-world actions (4th)
     Extra: favors less fuel consumption (non-stay actions)
 
 Heuristic mode
@@ -117,7 +119,7 @@ def heuristic(env, goal_info, stage, x, y, z, gx, gy, lv, mode, teleport):
                 d2 = 999
                 for (nx, ny) in env.valid_neighbor[gx, gy]:
                     d2 = min(nx, w1 - nx - 1, ny, w2 - ny - 1, d2)
-                h = d1 + d2 * 2 + 1
+                h = d1 + d2 * 2 + 2
                 hg = d1 + d2 + 1
             else:
                 for (nx, ny) in env.valid_neighbor[gx, gy]:  # Will move to a neighbor of goal
@@ -135,14 +137,14 @@ def heuristic(env, goal_info, stage, x, y, z, gx, gy, lv, mode, teleport):
                     d1 = 999
                     for (nx, ny) in env.valid_neighbor[gx, gy]:
                         d1 = min(d1, nx, w1 - nx - 1, ny, w2 - ny - 1)
-                    h = 2 * d1 + 2
+                    h = 2 * d1 + 3
                     hg = d1 + 2
                 else:
                     for (nx, ny) in env.valid_neighbor[gx, gy]:
                         d1 = manhattan(x, y, nx, ny)
                         d2 = min(nx, w1 - nx - 1, ny, w2 - ny - 1)
-                        if d1 + d2 < h:
-                            h = d1 + d2 + 1
+                        if d1 + d2 + 2 < h:
+                            h = d1 + d2 + 2
                             hg = d1 + 1
             else:
                 for (nx, ny) in env.valid_neighbor[gx, gy]:
@@ -152,14 +154,14 @@ def heuristic(env, goal_info, stage, x, y, z, gx, gy, lv, mode, teleport):
                     if d < h:
                         h = d
                         hg = d1
-        else:  # Distance to border
-            h = min(x, w1 - x - 1, y, w2 - y - 1)
+        else:  # Distance to parking location
+            h = min(x, w1 - x - 1, y, w2 - y - 1) + teleport
             hg = 0
         return h, hg
     elif mode == 2:
         h = 1000
         hg = 0
-        if stage == 0:  # Distance to depo to goal to border
+        if stage == 0:  # Distance to depo to goal to parking location
             if teleport:
                 d1 = 2  # 'depo' and move into world
                 if x != -1:
@@ -167,7 +169,7 @@ def heuristic(env, goal_info, stage, x, y, z, gx, gy, lv, mode, teleport):
                 d2 = 1000
                 for (nx, ny, nz) in goal_info['g2neighbor'][(gx, gy, lv)]:
                     d2 = min(d2, goal_info['d2border'].get((nx, ny, nz), 1000))
-                h = d1 + d2 * 2 + 1
+                h = d1 + d2 * 2 + 2
                 hg = d1 + d2 + 1
             else:
                 for (nx, ny, nz) in goal_info['g2neighbor'][(gx, gy, lv)]:
@@ -188,7 +190,7 @@ def heuristic(env, goal_info, stage, x, y, z, gx, gy, lv, mode, teleport):
                     d1 = 1000
                     for (nx, ny, nz) in goal_info['g2neighbor'][(gx, gy, lv)]:
                         d1 = min(d1, goal_info['d2border'].get((nx, ny, nz), 1000))
-                    h = 2 * d1 + 2
+                    h = 2 * d1 + 3
                     hg = d1 + 2
                 else:
                     for (nx, ny, nz) in goal_info['g2neighbor'][(gx, gy, lv)]:
@@ -197,8 +199,8 @@ def heuristic(env, goal_info, stage, x, y, z, gx, gy, lv, mode, teleport):
                             continue
                         d1 = d2nbr.get((x + w1, y + w2, z), 1000)  # d to neighbor directly
                         d2 = goal_info['d2border'].get((nx, ny, nz), 1000)
-                        if d1 + d2 + 1 < h:
-                            h = d1 + d2 + 1
+                        if d1 + d2 + 2 < h:
+                            h = d1 + d2 + 2
                             hg = d1 + 1
             else:
                 for (nx, ny, nz) in goal_info['g2neighbor'][(gx, gy, lv)]:
@@ -211,8 +213,8 @@ def heuristic(env, goal_info, stage, x, y, z, gx, gy, lv, mode, teleport):
                     if d < h:
                         h = d
                         hg = d1 + 1
-        else:  # Distance to border
-            h = goal_info['d2border'].get((x, y, z), 1000)
+        else:  # Distance to parking location
+            h = 0 if x == -1 else goal_info['d2border'].get((x, y, z), 1000) + teleport
             hg = 0
         return h, hg
     else:
@@ -351,9 +353,10 @@ def push_node(open_list, node, gen, mode):
         2: order = g + h, h, h2g, fuel
         3: order = g + h, h2g, h, fuel
         4: order = g + h, collision, h, h2g, fuel
+        5: order = g + h, collision, h, h2g, in_world
      """
     g, h, x, y, z, stage = node.g, node.h, node.x, node.y, node.z, node.stage
-    h2g, collision, fuel = node.h2g, node.collision, node.fuel
+    h2g, collision, fuel, in_world = node.h2g, node.collision, node.fuel, node.in_world
     if mode == 0:
         heapq.heappush(open_list, (- stage, g + h, h, x, y, z, node))
     elif mode == 1:
@@ -364,6 +367,8 @@ def push_node(open_list, node, gen, mode):
         heapq.heappush(open_list, (g + h, h2g, h, fuel, x, y, z, node))
     elif mode == 4:
         heapq.heappush(open_list, (g + h, collision, h, h2g, fuel, x, y, z, gen, node))
+    elif mode == 5:
+        heapq.heappush(open_list, (g + h, collision, h, h2g, in_world, x, y, z, gen, node))
     else:
         raise NotImplementedError
 
@@ -382,7 +387,7 @@ def a_star(env, goal_info, constraints, aid, arg, earliest=0, latest=float('inf'
     cons, max_con_step = filter_constraints(constraints, aid)
     heu, teleport = arg.heu, arg.teleport
 
-    if paths is not None and arg.order == 4:
+    if paths is not None and arg.order >= 4:
         if goal[0] == -1:
             ignore_goals = None
         else:
@@ -405,9 +410,10 @@ def a_star(env, goal_info, constraints, aid, arg, earliest=0, latest=float('inf'
         node = heapq.heappop(open_list)[-1]
         x, y, z, stage, g = node.x, node.y, node.z, node.stage, node.g
 
-        '''Completion check: at stage 2, at border, no further constraints'''
-        if g >= earliest and stage == 2 and (x, y) in env.border_loc and g >= max_con_step:
-            return get_path(node)
+        '''Completion check: at stage 2, at parking location, no further constraints'''
+        if stage == 2 and g >= max_con_step:
+            if (teleport and x == -1) or (not teleport and (x, y) in env.border_loc):
+                return get_path(node)
 
         '''Expand node'''
         children = []
@@ -424,8 +430,8 @@ def a_star(env, goal_info, constraints, aid, arg, earliest=0, latest=float('inf'
                 children.append(child)
 
         '''Stage 1: try to finish goal'''
-        if stage == 1 and goal_ready(goal, x, y, z) and not constrained(x, y, x, y, g + 1, 'goal', cons) \
-                and not constrained_3d(x, y, z, g + 1, cons):
+        if g + 1 >= earliest and stage == 1 and goal_ready(goal, x, y, z) and \
+                not constrained(x, y, x, y, g + 1, 'goal', cons) and not constrained_3d(x, y, z, g + 1, cons):
             h_val, h2g = heuristic(env, goal_info, 2, x, y, z, gx, gy, lv, heu, teleport)
             child = Node(node, g + 1, h_val, h2g, x, y, z, 2, action='goal')
             children.append(child)
@@ -452,11 +458,11 @@ def a_star(env, goal_info, constraints, aid, arg, earliest=0, latest=float('inf'
 
         '''Teleport: leave world & enter world'''
         if arg.teleport:
-            if (x, y) in env.border_loc:
+            if x == -1 or (x, y) in env.border_loc:
                 h_val, h2g = heuristic(env, goal_info, stage, -1, -1, -1, gx, gy, lv, heu, teleport)
                 child = Node(node, g + 1, h_val, h2g, -1, -1, -1, stage)
                 children.append(child)
-            elif x == -1:
+            if x == -1:
                 for (x2, y2) in env.border_loc:
                     if constrained(x, y, x2, y2, g + 1, 'move', cons):
                         continue
@@ -467,10 +473,10 @@ def a_star(env, goal_info, constraints, aid, arg, earliest=0, latest=float('inf'
         '''Push children & duplicate detection'''
         for child in children:
             if child.g <= latest:  # Trim nodes with g > limit
-                if paths is not None and arg.order == 4:
+                if paths is not None and arg.order >= 4:
                     child.collision += count_collisions(child, aid, paths, heights, t2hid, block_actions, ignore_goals)
                 key = (child.stage, child.x, child.y, child.z, child.g)
-                val = (child.collision, child.fuel)
+                val = (child.collision, child.in_world if arg.order == 5 else child.fuel)
                 # New node, fewer collisions, or less fuel
                 if key not in closed_list or closed_list[key] > val:
                     gen += 1
@@ -516,6 +522,11 @@ class Node:
             self.fuel = parent.fuel
             if x != parent.x or y != parent.y or action != 'move':
                 self.fuel += 1
+            # In-world action = action starting from in-world location
+            self.in_world = parent.in_world
+            if x != -1:
+                self.in_world += 1
         else:
             self.collision = 0
             self.fuel = 0
+            self.in_world = 0
