@@ -8,30 +8,25 @@ import config
 from high_lv_astar import high_lv_plan
 from dependency import create_graph
 from cbs import cbs
-from task_allocation import select_tasks, allocate_tasks
+from task_allocation import select_tasks, allocate_tasks, remove_tasks
 
-def snapshot(path, carry, goal):
-    """Convert (loc, action) to (loc, carry, goal)"""
-    for i in range(len(path)):
-        if path[i][1] in ['depo', 'goal']:
-            carry = not carry
-        if path[i][1] == 'goal':
-            g = goal[:4]
-        else:
-            g = None
-        path[i] = (path[i][0], carry, g)
-    return path, carry
+"""
+Hierarchical planning pipeline
+1. High level plan with A*
+2. Action dependency graph generation
+3. Task selection and allocation
+4. Low level plan with CBS
+"""
 
-def plan():
-    dg.remove_node('S')
-    total = len(dg.nodes)
+def plan(dg):
+    total = len(dg.nodes) if arg.select == 1 else len(dg)
     assignment = [None for _ in range(num)]
     full_paths = [[(positions[i], carry_stats[i], None)] for i in range(num)]
     finish = generate = expand = 0
 
     while finish < total:
         assigned = [] if arg.reselect else [t for t in assignment if t is not None]
-        new_tasks, info = select_tasks(num, assigned, dg, k=arg.k)
+        new_tasks, info = select_tasks(num, assigned, dg, mode=arg.select, k=arg.k)
         last_round = len(assigned) + len(new_tasks) == total - finish
 
         info['pos'] = positions
@@ -61,7 +56,7 @@ def plan():
                         env.height[x, y] += 1
                     else:
                         env.height[x, y] -= 1
-                    dg.remove_node(assignment[i])
+                    remove_tasks(dg, assignment[i], mode=arg.select)
                     assignment[i] = None
         else:  # All tasks are assigned
             for i in range(num):
@@ -75,6 +70,59 @@ def plan():
             finish = total
     return full_paths, (generate, expand)
 
+def snapshot(path, carry, goal):
+    """Convert (loc, action) to (loc, carry, goal)"""
+    for i in range(len(path)):
+        if path[i][1] in ['depo', 'goal']:
+            carry = not carry
+        if path[i][1] == 'goal':
+            g = goal[:4]
+        else:
+            g = None
+        path[i] = (path[i][0], carry, g)
+    return path, carry
+
+def hierarchy():
+    """Hierarchical planning pipeline"""
+    '''1. High-level plan'''
+    if arg.start == 0:
+        env.set_goal()
+        env.set_shadow(val=True)
+        env.set_distance_map()
+        env.set_support_map()
+        high_actions = high_lv_plan(env, arg)
+        save_path = f'result/high_action_{arg.map}.pkl' if arg.map > 0 else 'result/high_action.pkl'
+        with open(save_path, 'wb') as f:
+            pk.dump([high_actions, {'goal': env.goal, 'shadow': env.shadow}], f)
+    else:
+        load_path = f'result/high_action_{arg.map}.pkl' if arg.map > 0 else 'result/high_action.pkl'
+        with open(load_path, 'rb') as f:
+            high_actions, info = pk.load(f)
+            env.goal = info['goal']
+            env.shadow = info['shadow']
+            env.H = env.goal.max()
+    print(f'Number of actions: {len(high_actions)}')
+
+    '''2. Action dependency graph generation'''
+    if arg.start <= 1:
+        if arg.select == 0:
+            dg = []
+            for a in high_actions:
+                dg.append((a[0], a[1], a[2], a[3], 0))
+        else:
+            dg = create_graph(env, high_actions, arg)
+        save_path = f'result/dependency_{arg.map}.pkl' if arg.map > 0 else 'result/dependency.pkl'
+        with open(save_path, 'wb') as f:
+            pk.dump(dg, f)
+    else:
+        load_path = f'result/dependency_{arg.map}.pkl' if arg.map > 0 else 'result/dependency.pkl'
+        with open(load_path, 'rb') as f:
+            dg = pk.load(f)
+
+    '''3. Task allocation and low-level path planning'''
+    paths, stat = plan(dg)
+    return paths, stat
+
 
 if __name__ == '__main__':
     arg = config.process_config()
@@ -82,7 +130,7 @@ if __name__ == '__main__':
     env = lego.GridWorld(arg)
     env.set_mirror_map()
     if arg.teleport:
-        positions = [(-1, -1, -1) for _ in range(arg.num)]
+        positions = [(-1, -1) for _ in range(arg.num)]
     else:
         positions = list(env.border_loc)[:arg.num]
         positions = [(x, y, 0) for x, y in positions]
@@ -96,45 +144,11 @@ if __name__ == '__main__':
     else:
         start = time.time()
 
-    if arg.start == 0:  # Generate high-level plan
-        env.set_goal()
-        env.set_shadow(val=True)
-        env.set_distance_map()
-        env.set_support_map()
-        env.set_light()
-        high_actions = high_lv_plan(env, arg)
-        save_path = f'result/high_action_{arg.map}.pkl' if arg.map > 0 else 'result/high_action.pkl'
-        with open(save_path, 'wb') as f:
-            pk.dump([high_actions, {'goal': env.goal, 'shadow': env.shadow}], f)
-        print(f'Number of actions: {len(high_actions)}')
-        dg = create_graph(env, high_actions, arg)
-        save_path = f'result/dependency_{arg.map}.pkl' if arg.map > 0 else 'result/dependency.pkl'
-        with open(save_path, 'wb') as f:
-            pk.dump(dg, f)
-
-    elif arg.start == 1:  # Load high-level plan
-        load_path = f'result/high_action_{arg.map}.pkl' if arg.map > 0 else 'result/high_action.pkl'
-        with open(load_path, 'rb') as f:
-            high_actions, info = pk.load(f)
-            env.goal = info['goal']
-            env.shadow = info['shadow']
-            env.H = env.goal.max()
-        print(f'Number of actions: {len(high_actions)}')
-        dg = create_graph(env, high_actions, arg)
-        save_path = f'result/dependency_{arg.map}.pkl' if arg.map > 0 else 'result/dependency.pkl'
-        with open(save_path, 'wb') as f:
-            pk.dump(dg, f)
-
-    else:  # Load dependency graph
-        load_path = f'result/dependency_{arg.map}.pkl' if arg.map > 0 else 'result/dependency.pkl'
-        with open(load_path, 'rb') as f:
-            dg = pk.load(f)
-
-    paths, stat = plan()
+    paths, stat = hierarchy()
 
     if arg.profile:
         profiler.disable()
-        stats = pstats.Stats(profiler).sort_stats('tottime')
+        stats = pstats.Stats(profiler).sort_stats('cumtime')
         stats.print_stats(20)
     else:
         print(f'Time: {time.time() - start:.3f} s')
@@ -142,13 +156,8 @@ if __name__ == '__main__':
     sum_of_cost = 0
     for path in paths:
         for t in range(len(path)):
-            if path[t][0] != (-1, -1, -1):
+            if path[t][0] != (-1, -1):
                 sum_of_cost += 1
-    # fuel = 0
-    # for path in paths:
-    #     for t in range(len(path) - 1):
-    #         if path[t][0] != path[t + 1][0] or path[t][1] != path[t + 1][1]:
-    #             fuel += 1
 
     print(f'Makespan: {len(paths[0])-1}, Sum of cost: {sum_of_cost}')
     print(f'Generate: {stat[0]}, Expand: {stat[1]}')

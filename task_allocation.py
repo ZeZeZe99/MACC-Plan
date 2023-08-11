@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
-from path_finding import distance2border, distance2neighbor, heuristic
+from path_finding import distance2border, distance2neighbor, movable_neighbor, heuristic
 
 """
 Task selection methods
@@ -16,9 +16,44 @@ Method 2: Dependency selection
 
 
 '''Select new tasks'''
-def select_tasks(num, assigned, g, k=1):
-    new_tasks, dep = dependency_selection(num, g, assigned, level=k)
+def select_tasks(num, assigned, g, mode=0, k=1):
+    if mode == 0:
+        new_tasks, dep = sequence_selection(num, assigned, g)
+    else:
+        new_tasks, dep = dependency_selection(num, g, assigned, level=k)
     return new_tasks, dep
+
+def sequence_selection(num, assigned, seq):
+    tasks = seq[:min(num, len(seq))]
+    new_tasks = [t for t in tasks if t not in assigned]
+
+    '''Add naive dependency'''
+    dep_lv_2_g, g_2_dep_lv, predecessors, successors, all_succ = {}, {}, {}, {}, {}
+    for i in range(len(tasks)):
+        lv = 0
+        predecessors[tasks[i]] = set()
+        successors[tasks[i]] = set()
+        xi, yi = tasks[i][1:3]
+        '''Add dependency to previous task at the same x-y coordinate'''
+        for j in range(i - 1, -1, -1):
+            xj, yj = tasks[j][1:3]
+            if xj == xi and yj == yi:
+                lv = g_2_dep_lv[tasks[j]] + 1
+                predecessors[tasks[i]].add(tasks[j])
+                successors[tasks[j]].add(tasks[i])
+                break
+        ''''''
+        if lv not in dep_lv_2_g:
+            dep_lv_2_g[lv] = set()
+        dep_lv_2_g[lv].add(tasks[i])
+        g_2_dep_lv[tasks[i]] = lv
+    for i in range(len(tasks) - 1, -1, -1):
+        all_succ[tasks[i]] = successors[tasks[i]].copy()
+        for j in successors[tasks[i]]:
+            all_succ[tasks[i]] |= all_succ[j]
+    info = {'dep_lv_2_g': dep_lv_2_g, 'g_2_dep_lv': g_2_dep_lv, 'pred': predecessors, 'succ': successors,
+            'all_succ': all_succ}
+    return new_tasks, info
 
 def dependency_selection(num, g, assigned, level=1):
     assert level >= 0
@@ -86,12 +121,15 @@ def preprocess_tasks(tasks, info, env):
             for (nx, ny) in env.valid_neighbor[gx, gy]:
                 nzs = loc2height[(nx, ny)]
                 if lv in nzs:
-                    g2neighbor[(gx, gy, lv)].add((nx, ny, lv))
+                    # g2neighbor[(gx, gy, lv)].add((nx, ny, lv))
+                    g2neighbor[(gx, gy, lv)].add((nx, ny))
+            assert len(g2neighbor[(gx, gy, lv)]) > 0
     '''Pre-compute distance heuristic'''
     info['d2border'] = distance2border(env, loc2height)
     info['d2neighbor'] = distance2neighbor(env, loc2height, g2neighbor)
     info['loc2height'] = loc2height
     info['g2neighbor'] = g2neighbor
+    info['movable'] = movable_neighbor(env, loc2height)
 
 def postprocess_tasks(info):
     """Post-process task information, assuming tasks are assigned"""
@@ -166,7 +204,7 @@ def matching_allocate(assignment, tasks, info, env, arg):
     return assignment
 
 def estimate_cost(info, env, task, aid, arg):
-    x, y, z = info['pos'][aid]
+    x, y = info['pos'][aid]
     carry = info['carry'][aid]
     add, gx, gy, lv, _ = task
     if add < 0:
@@ -175,5 +213,14 @@ def estimate_cost(info, env, task, aid, arg):
         stage = 1
     else:
         stage = 0
-    cost = heuristic(env, info, stage, x, y, z, gx, gy, lv, arg.heu, arg.teleport)[1]
+    # cost = heuristic(env, info, stage, x, y, z, gx, gy, lv, arg.heu, arg.teleport)[1]
+    cost = heuristic(env, info, stage, x, y, gx, gy, lv, arg.heu, arg.teleport)[1]
     return cost
+
+
+'''Remove completed tasks'''
+def remove_tasks(dg, task, mode):
+    if mode == 0:
+        dg.remove(task)
+    else:
+        dg.remove_node(task)

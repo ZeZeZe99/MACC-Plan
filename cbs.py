@@ -42,24 +42,19 @@ Cost mode
     2: Makespan = min time to finish tasks (early rounds) and max time to return to parking location (last round)
 
 Conflict detect order
-    0: default, order = time, conflict type (level, edge-block, agent-block, vertex, edge, block-block)
-    1: level first, order = (level), (edge-block, agent-block, vertex, edge, block-block), each group sorted by time
-    2: level and block first, order = (level, edge-block, agent-block), (vertex, edge, block-block)
-    3: block first, order = (edge-block, agent-block), (level), (vertex, edge, block-block)
+    0: default, order = time, conflict type (edge-block, agent-block, move-height, block-height, vertex, edge)
+    1: block first, order = (edge-block, agent-block, move-height, block-height), (vertex, edge, block-block), 
+       each group sorted by time
 
 Conflict resolve order (several conflicts, each between 2 paths, choose which one to resolve)
     0: default order, use agent index
     1: conflict time order, solve conflict happening earlier first
     2: constraint time order, solve conflict that produces earlier constraints first
-    3: constraint type order, (level), (edge-block), (vertex, edge, block-block, agent-block)
-    4: constraint type order 2, (level, edge-block, agent-block), (vertex, edge, block-block)
+    3: constraint type order, (edge-block, agent-block, move-height, block-height), (vertex, edge, block-block)
 """
 
-
-'''Path processing'''
 def insert_stays(goal_info, paths, times, goal=None):
-    """Insert stay actions to make all paths 'in-order' (meet the goal ordering)"""
-    # TODO: insert out-of-world stay actions when possible?
+    """Insert stay actions to make all paths satisfy dependency"""
     if goal is None:
         lv = 1
         while lv in goal_info['dep_lv_2_g']:
@@ -95,7 +90,7 @@ def insert_stays(goal_info, paths, times, goal=None):
     return paths, times
 
 def extend_paths(paths, window):
-    """Extend all paths to a fixed length by appending stay actions"""
+    """Extend paths to a fixed length by appending stay actions"""
     for path in paths:
         pos = (path[-1][0], 'move')
         path += [pos] * (window - len(path))
@@ -120,42 +115,31 @@ def detect_conflict(heights, t2hid, path1, path2, block_action1, block_action2, 
     """
     Detect conflicts between two paths
     Detect order
-        0: time, conflict type (level, edge-block, agent-block, vertex, edge, block-block)
-        1: level first, (level), (edge-block, agent-block, vertex, edge, block-block), each group sorted by time
-        2: level and block first, (level, edge-block, agent-block), (vertex, edge, block-block)
+        0: time, conflict type (edge-block, agent-block, move-height, block-height, vertex, edge)
+        1: block first, order = (edge-block, agent-block, move-height, block-height), (vertex, edge, block-block),
+           each group sorted by time
     """
     t1, (add1, gx1, gy1, lv1, _) = block_action1
     t2, (add2, gx2, gy2, lv2, _) = block_action2
     gloc1, gloc2 = (gx1, gy1), (gx2, gy2)
 
-    for r in range(3):
-        if (r == 1 and mode == 0) or (r == 2 and mode < 3):
+    for r in range(2):
+        if (r == 1 and mode == 0):
             break
+
         ploc1, ploc2 = path1[0][0][:2], path2[0][0][:2]
         for t in range(1, len(path1)):
             height = heights[t2hid[t]] if t in t2hid else heights[-1]
             loc1, loc2 = path1[t][0][:2], path2[t][0][:2]
-            z1, z2 = path1[t][0][2], path2[t][0][2]
 
-            if loc1[0] == -1 or loc2[0] == -1:
-                ploc1, ploc2 = loc1, loc2
-                continue
-
-            if (r == 0 and mode < 3) or (r == 1 and mode == 3):
-                # Level conflict (agent's z level doesn't match the height, due to the other agent's block action)
-                if gloc1 == loc2 and height[loc2] != z2 and (lv1 == z2 or lv1 == z2 - 1):
-                    return {'type': 'level', 'time': t, 'loc': (loc2, z2), 'block': 1, 'block_t': t1, 't': min(t, t1)}
-                if gloc2 == loc1 and height[loc1] != z1 and (lv2 == z1 or lv2 == z1 - 1):
-                    return {'type': 'level', 'time': t, 'loc': (loc1, z1), 'block': 2, 'block_t': t2, 't': min(t, t2)}
-
-            if (r == 0 and mode in [0, 2, 3]) or (r == 1 and mode == 1):
-                # Edge-block conflict: a1 moves from A to B, while a2 performs block action from B to A
+            if r == 0:
+                '''Edge-block conflict: a1 moves from A to B, while a2 performs block action from B to A'''
                 if t == t1 and gloc1 == ploc2 and loc1 == loc2:
                     return {'type': 'edge-block', 'time': t, 'loc': (loc1, gloc1), 'block': 1, 't': t}
                 if t == t2 and gloc2 == ploc1 and loc1 == loc2:
                     return {'type': 'edge-block', 'time': t, 'loc': (loc2, gloc2), 'block': 2, 't': t}
 
-                # Agent-block conflict: a1 moves from A to B, while a2 performs block action at A or B
+                '''Agent-block conflict: a1 moves from A to B, while a2 performs block action at B'''
                 if t == t1:
                     if gloc1 == ploc2 == loc2:  # Agent 2 staying at agent 1's block location
                         return {'type': 'agent-block', 'time': t, 'loc': gloc1, 'block': 1, 'move': 'stay', 't': t}
@@ -171,21 +155,36 @@ def detect_conflict(heights, t2hid, path1, path2, block_action1, block_action2, 
                     if gloc2 == loc1:
                         return {'type': 'agent-block', 'time': t, 'loc': gloc2, 'block': 2, 'move': 'arrive', 't': t}
 
-            if (r == 0 and mode == 0) or (r == 1 and 1 <= mode <= 2) or (r == 2 and mode == 3):
-                # Vertex conflict
-                if loc1 == loc2:
+                '''Move height conflict: a1 moves from A to B, B is a2's goal location, with height difference > 1'''
+                h1, h2 = height[loc1], height[loc2]
+                ph1, ph2 = height[ploc1], height[ploc2]
+                if gloc1 == loc2 and ((ph2 < h2 and lv1 == h2 + 1) or (ph2 > h2 and lv1 == h2 - 2)):
+                    return {'type': 'move-height', 'time': t, 'loc': (loc1, loc2), 'block': 1, 't': t}
+                if gloc2 == loc1 and ((ph1 < h1 and lv2 == h1 + 1) or (ph1 > h1 and lv2 == h1 - 2)):
+                    return {'type': 'move-height', 'time': t, 'loc': (loc2, loc1), 'block': 2, 't': t}
+
+                '''Block height conflict: a1 performs block action from A to B, A = g2, while height is incorrect'''
+                if t == t1 and loc1 == gloc2 and lv1 != h1 and (1 >= lv1 - lv2 >= 0):
+                    return {'type': 'block-height', 'time': t, 'loc': loc1, 'curr': 1, 't': t, 't2': t2}
+                if t == t2 and loc2 == gloc1 and lv2 != h2 and (1 >= lv2 - lv1 >= 0):
+                    return {'type': 'block-height', 'time': t, 'loc': loc2, 'curr': 2, 't': t, 't2': t1}
+
+            if (r == 0 and mode == 0) or (r == 1 and mode == 1):
+                '''No conflict outside the world'''
+                if ploc1[0] == -1 or ploc2[0] == -1 or loc1[0] == -1 or loc2[0] == -1:
+                    continue
+                '''Vertex conflict'''
+                if loc1 == loc2 and loc1[0] != -1:
                     return {'type': 'vertex', 'time': t, 'loc': loc1, 't': t}
-
-                # Edge conflict
-                if loc1 == ploc2 and loc2 == ploc1:
+                '''Edge conflict'''
+                if loc1 == ploc2 and loc2 == ploc1 and loc1[0]:
                     return {'type': 'edge', 'time': t, 'loc': (ploc1, loc1), 't': t}
-
-                # Block-block conflict
-                if t == t1 == t2 and gloc1 == gloc2:
-                    return {'type': 'block-block', 'time': t, 'loc': gloc1, 't': t}
+                '''Block-block conflict: ignored, won't happen'''
 
             ploc1, ploc2 = loc1, loc2
+
     return None
+
 
 def resolve_conflict(conflict):
     """
@@ -204,12 +203,8 @@ def resolve_conflict(conflict):
         cons1.append(('edge', conflict['a1'], time, loc))
         loc2 = (loc[1], loc[0])
         cons2.append(('edge', conflict['a2'], time, loc2))
-    # Block-block conflict
-    elif conflict['type'] == 'block-block':
-        cons1.append(('block', conflict['a1'], time))
-        cons2.append(('block', conflict['a2'], time))
     # Agent-block conflict
-    elif conflict['type'] == 'agent-block':
+    elif conflict['type'] == 'agent-block':  # Disallow move or disallow block action
         block_a = conflict['a1'] if conflict['block'] == 1 else conflict['a2']
         move_a = conflict['a1'] if conflict['block'] == 2 else conflict['a2']
         cons1.append(('block', block_a, time))
@@ -235,20 +230,39 @@ def resolve_conflict(conflict):
             cons1.append(('block', block_a, t))
             cons2.append(('vertex', move_a, t, loc[0]))
             cons2.append(('vertex', move_a, t, loc[1]))
-    # Level conflict
-    elif conflict['type'] == 'level':
+    # Move height conflict
+    elif conflict['type'] == 'move-height':
         block_a = conflict['a1'] if conflict['block'] == 1 else conflict['a2']
         move_a = conflict['a1'] if conflict['block'] == 2 else conflict['a2']
         tb = conflict['block_t']
-        # Block action has not been executed: cannot use this level vertex until execution
+        # Block action has not been executed: cannot use this edge until execution
         if time < tb:
             for t in range(time, tb + 1):
-                cons1.append(('lv-vertex', move_a, t, loc, False))
-        # Block action has been executed: cannot use this level vertex after execution
+                cons1.append(('edge', move_a, time, loc))
+        # Block action has been executed: cannot use this edge after execution TODO: forever / until a counter action?
         else:
-            cons1.append(('lv-vertex', move_a, tb, loc, True))
-            for t in range(tb, time + 2):  # 1 extra step to leave
+            cons1.append(('range-edge', move_a, tb, loc))
+            for t in range(tb, time + 1):
+                # cons1.append(('edge', move_a, t, loc))
                 cons2.append(('block', block_a, t))
+            cons2.append(('block', block_a, time + 1))  # 1 extra step to leave
+    # Block height conflict
+    elif conflict['type'] == 'block-height':
+        block_curr = conflict['a1'] if conflict['curr'] == 1 else conflict['a2']
+        block_nbr = conflict['a1'] if conflict['curr'] == 2 else conflict['a2']
+        tn = conflict['t2']
+        # Block action at neighbor location has not been executed: cannot use this edge until execution
+        if time < tn:
+            for t in range(time, tn + 2):  # One extra step to enter
+                cons1.append(('block-nbr', block_curr, t, loc))
+        # Block action at neighbor location has been executed: cannot use this edge after execution
+        else:
+            cons1.append(('range-block-nbr', block_curr, tn, loc))
+            for t in range(tn, time + 1):
+                # cons1.append(('block-nbr', block_curr, t, loc))
+                cons2.append(('block', block_nbr, t))
+            cons2.append(('block', block_nbr, time + 1))  # 1 extra step to leave
+            cons2.append(('block', block_nbr, time + 2))  # 1 extra step to leave
     else:
         raise Exception('Invalid conflict type')
     return cons1, cons2
@@ -306,6 +320,7 @@ def push_node(open_list, node):
     """Push a node into the open list. Order = cost, # conflicts, gen_id"""
     heapq.heappush(open_list, (node.cost, len(node.conflicts), node.gen_id, node))
 
+
 def cbs(env, goal_info, arg, last_round):
     height = env.height
     num = len(goal_info['goals'])
@@ -359,7 +374,7 @@ def cbs(env, goal_info, arg, last_round):
             if path:
                 child.paths[aid] = path
                 child.times[aid] = t
-                child.paths, child.times = insert_stays(goal_info, child.paths, child.times, goal=goal_info['goals'][aid])
+                child.paths, child.times = insert_stays(goal_info, child.paths, child.times, goal_info['goals'][aid])
                 window = max([len(p) for p in child.paths])
                 extend_paths(child.paths, window)
                 child.block_actions = [(child.times[i], goal_info['goals'][i]) for i in range(num)]
@@ -382,5 +397,4 @@ class Node:
         self.gen_id = gen_id
         self.cost = None
         self.conflicts = None
-
 

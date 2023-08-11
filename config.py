@@ -7,9 +7,10 @@ heu = 2
 order = 5
 
 cost = 2
-detect = 2
-resolve = 5
+detect = 1
+resolve = 3
 
+select = 1
 reselect = False
 allocate = 1
 k = 1
@@ -45,6 +46,7 @@ def get_parser():
     parser.add_argument('--detect', type=int, default=detect, help='CBS conflict detection order')
     parser.add_argument('--resolve', type=int, default=resolve, help='CBS conflict resolution order')
 
+    parser.add_argument('--select', type=int, default=select, help='Task selection mode')
     parser.add_argument('--reselect', type=bool, default=reselect, help='Re-select tasks upon each round of allocation')
     parser.add_argument('--allocate', type=int, default=allocate, help='Task allocation mode')
     parser.add_argument('--k', type=int, default=k, help='Levels of tasks to allocate')
@@ -59,12 +61,10 @@ def process_config():
     arg = arg.parse_args()
 
     if arg.resolve == 3:
-        arg.priority = {'level': 0, 'edge-block': 1, 'agent-block': 2, 'vertex': 2, 'edge': 2, 'block-block': 2}
+        arg.priority = {'edge-block': 0, 'agent-block': 0, 'move-height': 0, 'block-height': 0, 'vertex': 1, 'edge': 1}
     elif arg.resolve == 4:
-        arg.priority = {'level': 0, 'edge-block': 0, 'agent-block': 0, 'vertex': 1, 'edge': 1, 'block-block': 1}
-    elif arg.resolve == 5:
-        arg.priority = {'level': 1, 'edge-block': 0, 'agent-block': 0, 'vertex': 2, 'edge': 2, 'block-block': 2}
+        arg.priority = {'edge-block': 0, 'agent-block': 0, 'move-height': 1, 'block-height': 1, 'vertex': 2, 'edge': 2}
     else:
-        arg.priority = {'level': 0, 'edge-block': 0, 'agent-block': 0, 'vertex': 0, 'edge': 0, 'block-block': 0}
+        arg.priority = {'edge-block': 0, 'agent-block': 0, 'move-height': 0, 'block-height': 0, 'vertex': 0, 'edge': 0}
 
     return arg
