@@ -1,20 +1,19 @@
 import argparse
 
-m = 1
+m = 3
 
 teleport = True
 heu = 2
 order = 5
 
-cost = 2
-detect = 1
+cost = 1
+detect = 0
 resolve = 3
 
-select = 1
 reselect = False
 allocate = 1
 k = 1
-
+execute = 2
 
 def get_parser():
     parser = argparse.ArgumentParser(description='Planning settings')
@@ -46,10 +45,11 @@ def get_parser():
     parser.add_argument('--detect', type=int, default=detect, help='CBS conflict detection order')
     parser.add_argument('--resolve', type=int, default=resolve, help='CBS conflict resolution order')
 
-    parser.add_argument('--select', type=int, default=select, help='Task selection mode')
+    parser.add_argument('--select', type=int, default=1, help='Task selection mode')
     parser.add_argument('--reselect', type=bool, default=reselect, help='Re-select tasks upon each round of allocation')
     parser.add_argument('--allocate', type=int, default=allocate, help='Task allocation mode')
     parser.add_argument('--k', type=int, default=k, help='Levels of tasks to allocate')
+    parser.add_argument('--execute', type=int, default=execute, help='Re-plan upon execution of first task')
 
     '''Profile'''
     parser.add_argument('--profile', action='store_true', help='Profile runtime')
@@ -64,6 +64,8 @@ def process_config():
         arg.priority = {'edge-block': 0, 'agent-block': 0, 'move-height': 0, 'block-height': 0, 'vertex': 1, 'edge': 1}
     elif arg.resolve == 4:
         arg.priority = {'edge-block': 0, 'agent-block': 0, 'move-height': 1, 'block-height': 1, 'vertex': 2, 'edge': 2}
+    elif arg.resolve == 5:
+        arg.priority = {'edge-block': 1, 'agent-block': 1, 'move-height': 0, 'block-height': 0, 'vertex': 2, 'edge': 2}
     else:
         arg.priority = {'edge-block': 0, 'agent-block': 0, 'move-height': 0, 'block-height': 0, 'vertex': 0, 'edge': 0}
 

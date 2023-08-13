@@ -5,54 +5,91 @@ from path_finding import distance2border, distance2neighbor, movable_neighbor, h
 
 """
 Task selection methods
-Method 1: Naive selection
-    1) Select the first N tasks from the high-level plan
-    2) Remove tasks that deal with the same block as another task
-    3) Fill up the remaining tasks with dummy tasks
-Method 2: Dependency selection
-    1) Select the first N tasks from the current lowest k level of the dependency graph
-    2) Fill up the remaining tasks with dummy tasks
+Mode 0: Sequence selection
+    1. Sequentially select tasks from the original action sequence
+    2. Add naive precedence constraint to the previous task at the same x-y coordinate
+Mode 1: Level selection (k)
+    1. Take the reordered action sequence, which breaks into several levels
+    2. Sequentially select tasks from each level, up to k levels
+    3. Enforce higher levels to be executed after lower levels
 """
 
 
 '''Select new tasks'''
-def select_tasks(num, assigned, g, mode=0, k=1):
+def select_tasks(num, assigned, todo, mode=0, k=1):
     if mode == 0:
-        new_tasks, dep = sequence_selection(num, assigned, g)
+        new_tasks, priority = sequence_selection(num, assigned, todo)
+    elif mode == 1:
+        new_tasks, priority = level_selection(num, assigned, todo, k=k)
     else:
-        new_tasks, dep = dependency_selection(num, g, assigned, level=k)
-    return new_tasks, dep
+        new_tasks, priority = dependency_selection(num, todo, assigned, level=k)
+    return new_tasks, priority
 
 def sequence_selection(num, assigned, seq):
     tasks = seq[:min(num, len(seq))]
     new_tasks = [t for t in tasks if t not in assigned]
 
-    '''Add naive dependency'''
-    dep_lv_2_g, g_2_dep_lv, predecessors, successors, all_succ = {}, {}, {}, {}, {}
+    '''Add naive priority (precedence constraint between tasks at the same x-y coordinate)'''
+    lv_task, task_lv, predecessors, successors, all_succ = {}, {}, {}, {}, {}
     for i in range(len(tasks)):
         lv = 0
         predecessors[tasks[i]] = set()
         successors[tasks[i]] = set()
         xi, yi = tasks[i][1:3]
-        '''Add dependency to previous task at the same x-y coordinate'''
         for j in range(i - 1, -1, -1):
             xj, yj = tasks[j][1:3]
             if xj == xi and yj == yi:
-                lv = g_2_dep_lv[tasks[j]] + 1
+                lv = task_lv[tasks[j]] + 1
                 predecessors[tasks[i]].add(tasks[j])
                 successors[tasks[j]].add(tasks[i])
                 break
         ''''''
-        if lv not in dep_lv_2_g:
-            dep_lv_2_g[lv] = set()
-        dep_lv_2_g[lv].add(tasks[i])
-        g_2_dep_lv[tasks[i]] = lv
+        if lv not in lv_task:
+            lv_task[lv] = set()
+        lv_task[lv].add(tasks[i])
+        task_lv[tasks[i]] = lv
     for i in range(len(tasks) - 1, -1, -1):
         all_succ[tasks[i]] = successors[tasks[i]].copy()
         for j in successors[tasks[i]]:
             all_succ[tasks[i]] |= all_succ[j]
-    info = {'dep_lv_2_g': dep_lv_2_g, 'g_2_dep_lv': g_2_dep_lv, 'pred': predecessors, 'succ': successors,
+    info = {'lv_task': lv_task, 'task_lv': task_lv, 'pred': predecessors, 'succ': successors,
             'all_succ': all_succ}
+    return new_tasks, info
+
+def level_selection(num, assigned, level, k=1):
+    assert k >= 0
+    tasks = []
+    lv_tasks, task_lv, predecessors, successors, all_succ = {}, {}, {}, {}, {}
+    i = 0
+    for lv in range(max(level.keys()) + 1):
+        if len(level[lv]) == 0:
+            continue
+        if i == k or len(tasks) == num:
+            break
+        lv_tasks[i] = level[lv][:min(num - len(tasks), len(level[lv]))]
+        tasks += lv_tasks[i]
+        for t in lv_tasks[i]:
+            task_lv[t] = i
+        i += 1
+    for lv in range(i - 1, -1, -1):
+        for t in lv_tasks[lv]:
+            if lv + 1 in lv_tasks:
+                successors[t] = set(lv_tasks[lv + 1])
+                all_succ[t] = set()
+                for s in lv_tasks[lv + 1]:
+                    all_succ[t] |= all_succ[s]
+            else:
+                successors[t] = set()
+                all_succ[t] = set()
+            if lv - 1 in lv_tasks:
+                predecessors[t] = set(lv_tasks[lv - 1])
+            else:
+                predecessors[t] = set()
+    predecessors[(-1, -1, -1, -1, -1)] = set()
+    successors[(-1, -1, -1, -1, -1)] = set()
+    all_succ[(-1, -1, -1, -1, -1)] = set()
+    info = {'lv_tasks': lv_tasks, 'task_lv': task_lv, 'pred': predecessors, 'succ': successors, 'all_succ': all_succ}
+    new_tasks = [t for t in tasks if t not in assigned]
     return new_tasks, info
 
 def dependency_selection(num, g, assigned, level=1):
@@ -96,7 +133,7 @@ def dependency_selection(num, g, assigned, level=1):
     all_succ[(-1, -1, -1, -1, -1)] = set()
 
     new_tasks = [t for t in tasks if t not in assigned]
-    info = {'dep_lv_2_g': dep_lv_2_g, 'g_2_dep_lv': g_2_dep_lv, 'pred': predecessors, 'succ': successors,
+    info = {'lv_tasks': dep_lv_2_g, 'task_lv': g_2_dep_lv, 'pred': predecessors, 'succ': successors,
            'all_succ': all_succ}
     return new_tasks, info
 
@@ -213,14 +250,18 @@ def estimate_cost(info, env, task, aid, arg):
         stage = 1
     else:
         stage = 0
-    # cost = heuristic(env, info, stage, x, y, z, gx, gy, lv, arg.heu, arg.teleport)[1]
     cost = heuristic(env, info, stage, x, y, gx, gy, lv, arg.heu, arg.teleport)[1]
     return cost
 
 
 '''Remove completed tasks'''
-def remove_tasks(dg, task, mode):
+def remove_tasks(tasks, t, mode):
     if mode == 0:
-        dg.remove(task)
+        tasks.remove(t)
+    elif mode == 1:
+        for lv in tasks:
+            if t in tasks[lv]:
+                tasks[lv].remove(t)
+                break
     else:
-        dg.remove_node(task)
+        tasks.remove_node(t)

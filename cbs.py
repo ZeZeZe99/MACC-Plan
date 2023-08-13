@@ -1,5 +1,6 @@
 import heapq
 from copy import deepcopy
+import numpy as np
 
 from path_finding import a_star, construct_heights
 
@@ -13,7 +14,6 @@ Assumptions
         3) The parking endpoints form a ring
     2. # tasks = # agents
     3. There exists a single-agent path to finish all tasks (from high-level plan)
-    4. Do not add and remove the same block (so goals at the same x-y location are all adds or all removes)
 
 Properties
     1. All instances are solvable
@@ -26,20 +26,22 @@ Approach
     3. Extra conflicts
         1) Block-block conflict: two block actions at the same x-y location at the same time
         2) Agent-block conflict: a block action performed at the same x-y location the other agent is using
-        3) Level conflict: z level of an agent's path does not match the current height map
+        3) Move-height conflict: an agent moves to a location when height difference > 1
+        4) Block-height conflict: a block action performed at a location when relative height is incorrect
     4. Modified low-level search
-        1) Search in 3D space. z level is determined by possible heights affected by all tasks
-        2) Path = agent location (-> depo) -> goal location -> border
+        1) Use Multi-Label A*
+        2) Path = agent location (-> depo) -> goal location -> parking location
+        3) Graph is modified to include an edge only if a height difference <= 1 exists between two neighbors
     5. Dummy path
-        1) Path back to border, after finishing the task
+        1) Path back to parking location, after finishing the task
         2) Must plan, and must avoid collisions with the dummy path
         3) Guarantee that agents won't get stuck
         4) Always exists, from the high-level plan
 
 Cost mode
     0: Flow time = Σ time to finish tasks, ignoring dummy paths
-    1: Makespan = max time to finish tasks, ignoring dummy paths
-    2: Makespan = min time to finish tasks (early rounds) and max time to return to parking location (last round)
+    1: Makespan = max time to finish tasks (early rounds), max time to return to parking location (last round)
+    2: Makespan = min time to finish tasks (early rounds), max time to return to parking location (last round)
 
 Conflict detect order
     0: default, order = time, conflict type (edge-block, agent-block, move-height, block-height, vertex, edge)
@@ -50,15 +52,17 @@ Conflict resolve order (several conflicts, each between 2 paths, choose which on
     0: default order, use agent index
     1: conflict time order, solve conflict happening earlier first
     2: constraint time order, solve conflict that produces earlier constraints first
-    3: constraint type order, (edge-block, agent-block, move-height, block-height), (vertex, edge, block-block)
+    3: constraint type order, (block, height) -> (vertex, edge)
+    4: constraint type order, (block) -> (height) -> (vertex, edge)
+    5: constraint type order, (height) -> (block) -> (vertex, edge)
 """
 
 def insert_stays(goal_info, paths, times, goal=None):
     """Insert stay actions to make all paths satisfy dependency"""
     if goal is None:
         lv = 1
-        while lv in goal_info['dep_lv_2_g']:
-            goals = goal_info['dep_lv_2_g'][lv]
+        while lv in goal_info['lv_tasks']:
+            goals = goal_info['lv_tasks'][lv]
             for g in goals:
                 gid = goal_info['id'][g]
                 t_g = times[gid]
@@ -135,51 +139,52 @@ def detect_conflict(heights, t2hid, path1, path2, block_action1, block_action2, 
             if r == 0:
                 '''Edge-block conflict: a1 moves from A to B, while a2 performs block action from B to A'''
                 if t == t1 and gloc1 == ploc2 and loc1 == loc2:
-                    return {'type': 'edge-block', 'time': t, 'loc': (loc1, gloc1), 'block': 1, 't': t}
+                    return {'type': 'edge-block', 'time': t, 'loc': (loc1, gloc1), 'block': 1, 'rt': t-1}
                 if t == t2 and gloc2 == ploc1 and loc1 == loc2:
-                    return {'type': 'edge-block', 'time': t, 'loc': (loc2, gloc2), 'block': 2, 't': t}
+                    return {'type': 'edge-block', 'time': t, 'loc': (loc2, gloc2), 'block': 2, 'rt': t-1}
 
                 '''Agent-block conflict: a1 moves from A to B, while a2 performs block action at B'''
                 if t == t1:
                     if gloc1 == ploc2 == loc2:  # Agent 2 staying at agent 1's block location
-                        return {'type': 'agent-block', 'time': t, 'loc': gloc1, 'block': 1, 'move': 'stay', 't': t}
+                        return {'type': 'agent-block', 'time': t, 'loc': gloc1, 'block': 1, 'move': 'stay', 'rt': t-1}
                     if gloc1 == ploc2:  # Agent 2 leaving agent 1's block location
-                        return {'type': 'agent-block', 'time': t, 'loc': gloc1, 'block': 1, 'move': 'leave', 't': t}
+                        return {'type': 'agent-block', 'time': t, 'loc': gloc1, 'block': 1, 'move': 'leave', 'rt': t-1}
                     if gloc1 == loc2:  # Agent 2 arriving at agent 1's block location
-                        return {'type': 'agent-block', 'time': t, 'loc': gloc1, 'block': 1, 'move': 'arrive', 't': t}
+                        return {'type': 'agent-block', 'time': t, 'loc': gloc1, 'block': 1, 'move': 'arrive', 'rt': t}
                 if t == t2:
                     if gloc2 == ploc1 == loc1:
-                        return {'type': 'agent-block', 'time': t, 'loc': gloc2, 'block': 2, 'move': 'stay', 't': t}
+                        return {'type': 'agent-block', 'time': t, 'loc': gloc2, 'block': 2, 'move': 'stay', 'rt': t-1}
                     if gloc2 == ploc1:
-                        return {'type': 'agent-block', 'time': t, 'loc': gloc2, 'block': 2, 'move': 'leave', 't': t}
+                        return {'type': 'agent-block', 'time': t, 'loc': gloc2, 'block': 2, 'move': 'leave', 'rt': t-1}
                     if gloc2 == loc1:
-                        return {'type': 'agent-block', 'time': t, 'loc': gloc2, 'block': 2, 'move': 'arrive', 't': t}
+                        return {'type': 'agent-block', 'time': t, 'loc': gloc2, 'block': 2, 'move': 'arrive', 'rt': t}
 
                 '''Move height conflict: a1 moves from A to B, B is a2's goal location, with height difference > 1'''
                 h1, h2 = height[loc1], height[loc2]
                 ph1, ph2 = height[ploc1], height[ploc2]
-                if gloc1 == loc2 and ((ph2 < h2 and lv1 == h2 + 1) or (ph2 > h2 and lv1 == h2 - 2)):
-                    return {'type': 'move-height', 'time': t, 'loc': (loc1, loc2), 'block': 1, 't': t}
-                if gloc2 == loc1 and ((ph1 < h1 and lv2 == h1 + 1) or (ph1 > h1 and lv2 == h1 - 2)):
-                    return {'type': 'move-height', 'time': t, 'loc': (loc2, loc1), 'block': 2, 't': t}
+                if gloc1 == loc2 and ((ph2 < h2 - 1 and lv1 == ph2 + 1) or (ph2 > h2 + 1 and lv1 == ph2 - 2)):
+                    return {'type': 'move-height', 'time': t, 'loc': (ploc2, loc2), 'block': 1, 'tb': t1, 'rt': min(t, t1)}
+                if gloc2 == loc1 and ((ph1 < h1 - 1 and lv2 == ph1 + 1) or (ph1 > h1 + 1 and lv2 == ph1 - 2)):
+                    return {'type': 'move-height', 'time': t, 'loc': (ploc1, loc1), 'block': 2, 'tb': t2, 'rt': min(t, t2)}
 
                 '''Block height conflict: a1 performs block action from A to B, A = g2, while height is incorrect'''
                 if t == t1 and loc1 == gloc2 and lv1 != h1 and (1 >= lv1 - lv2 >= 0):
-                    return {'type': 'block-height', 'time': t, 'loc': loc1, 'curr': 1, 't': t, 't2': t2}
+                    return {'type': 'block-height', 'time': t, 'loc': loc1, 'curr': 1, 't2': t2, 'rt': min(t1, t2)}
                 if t == t2 and loc2 == gloc1 and lv2 != h2 and (1 >= lv2 - lv1 >= 0):
-                    return {'type': 'block-height', 'time': t, 'loc': loc2, 'curr': 2, 't': t, 't2': t1}
+                    return {'type': 'block-height', 'time': t, 'loc': loc2, 'curr': 2, 't2': t1, 'rt': min(t1, t2)}
 
             if (r == 0 and mode == 0) or (r == 1 and mode == 1):
                 '''No conflict outside the world'''
                 if ploc1[0] == -1 or ploc2[0] == -1 or loc1[0] == -1 or loc2[0] == -1:
-                    continue
-                '''Vertex conflict'''
-                if loc1 == loc2 and loc1[0] != -1:
-                    return {'type': 'vertex', 'time': t, 'loc': loc1, 't': t}
-                '''Edge conflict'''
-                if loc1 == ploc2 and loc2 == ploc1 and loc1[0]:
-                    return {'type': 'edge', 'time': t, 'loc': (ploc1, loc1), 't': t}
-                '''Block-block conflict: ignored, won't happen'''
+                    pass
+                else:
+                    '''Vertex conflict'''
+                    if loc1 == loc2 and loc1[0] != -1:
+                        return {'type': 'vertex', 'time': t, 'loc': loc1, 'rt': t}
+                    '''Edge conflict'''
+                    if loc1 == ploc2 and loc2 == ploc1 and loc1[0]:
+                        return {'type': 'edge', 'time': t, 'loc': (ploc1, loc1), 'rt': t}
+                    '''Block-block conflict: ignored, won't happen'''
 
             ploc1, ploc2 = loc1, loc2
 
@@ -234,7 +239,7 @@ def resolve_conflict(conflict):
     elif conflict['type'] == 'move-height':
         block_a = conflict['a1'] if conflict['block'] == 1 else conflict['a2']
         move_a = conflict['a1'] if conflict['block'] == 2 else conflict['a2']
-        tb = conflict['block_t']
+        tb = conflict['tb']
         # Block action has not been executed: cannot use this edge until execution
         if time < tb:
             for t in range(time, tb + 1):
@@ -271,8 +276,8 @@ def compute_cost(paths, block_actions, mode, last_round):
     """
     Compute the cost of a sequence of block actions
     Mode 0: cost = flow time = sum of time steps until goal (do not count dummy path)
-    Mode 1: cost = makespan = max of time steps until goal (do not count dummy path)
-    Mode 2: cost = makespan = min of time steps until goal, except for last round (use mode 1)
+    Mode 1: cost = makespan = max of time steps until goal, (early rounds), max of time steps until parking (last round)
+    Mode 2: cost = makespan = min of time steps until goal, (early rounds), max of time steps until parking (last round)
     Mode 3: cost = (mode 2, mode 1)
     """
     if mode == 0:
@@ -280,9 +285,12 @@ def compute_cost(paths, block_actions, mode, last_round):
         for t, _ in block_actions:
             cost += t
     elif mode == 1:
-        cost = 0
-        for t, _ in block_actions:
-            cost = max(cost, t)
+        if last_round:
+            cost = len(paths[0])
+        else:
+            cost = 0
+            for t, _ in block_actions:
+                cost = max(cost, t)
     elif mode == 2:
         if last_round:
             cost = 0
@@ -293,6 +301,10 @@ def compute_cost(paths, block_actions, mode, last_round):
             for t, _ in block_actions:
                 if t > 0:
                     cost = min(cost, t)
+    elif mode == 3:
+        cost1 = compute_cost(paths, block_actions, 2, last_round)
+        cost2 = compute_cost(paths, block_actions, 1, last_round)
+        cost = (cost1, cost2)
     else:
         raise NotImplementedError
     return cost
@@ -303,14 +315,16 @@ def order_conflicts(conflicts, mode):
     Mode 0: default order, use agent index
     Mode 1: conflict time order, solve conflicts happening earlier first
     Mode 2: constraint time order, solve conflicts that produce earlier constraints first
-    Mode 3: constraint type order, level - > edge-block -> (vertex, edge, block-block, agent-block)
+    Mode 3: constraint type order, (block, height) -> (vertex, edge)
+    Mode 4: constraint type order, (block) -> (height) -> (vertex, edge)
+    Mode 5: constraint type order, (height) -> (block) -> (vertex, edge)
     """
     if mode == 0:
         pass
     elif mode == 1:
         conflicts.sort(key=lambda x: x['time'])
     elif mode == 2:
-        conflicts.sort(key=lambda x: x['t'])
+        conflicts.sort(key=lambda x: x['rt'])
     elif mode >= 3:
         conflicts.sort(key=lambda x: x['priority'])
     else:
@@ -320,8 +334,8 @@ def push_node(open_list, node):
     """Push a node into the open list. Order = cost, # conflicts, gen_id"""
     heapq.heappush(open_list, (node.cost, len(node.conflicts), node.gen_id, node))
 
-
 def cbs(env, goal_info, arg, last_round):
+    assert arg.detect <= 1 and arg.resolve <= 5
     height = env.height
     num = len(goal_info['goals'])
     limit = env.w * env.w
@@ -397,4 +411,3 @@ class Node:
         self.gen_id = gen_id
         self.cost = None
         self.conflicts = None
-

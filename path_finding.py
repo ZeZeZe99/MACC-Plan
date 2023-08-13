@@ -307,12 +307,12 @@ def constrained(x1, y1, x2, y2, t, action, constraints):
             # Block neighbor constraint
             if action == 'goal' and c[0] == 'block-nbr' and (x2, y2) == c[3]:
                 return True
-        for c in constraints['range']:
-            if c[2] <= t:
-                if c[0] == 'range-edge' and ((x1, y1), (x2, y2)) == c[3]:
-                    return True
-                if c[0] == 'range-block-nbr' and (x2, y2) == c[3]:
-                    return True
+    for c in constraints['range']:
+        if c[2] <= t:
+            if c[0] == 'range-edge' and ((x1, y1), (x2, y2)) == c[3]:
+                return True
+            if c[0] == 'range-block-nbr' and (x2, y2) == c[3]:
+                return True
     return False
 
 def construct_heights(height, block_actions, ignore_goals=None):
@@ -407,7 +407,7 @@ def push_node(open_list, node, gen, mode):
     elif mode == 4:
         heapq.heappush(open_list, (g + h, collision, h, h2g, fuel, x, y, gen, node))
     elif mode == 5:
-        heapq.heappush(open_list, (g + h, collision, h, h2g, in_world, x, y, gen, node))
+        heapq.heappush(open_list, (g + h, collision, h, h2g, in_world, fuel, x, y, gen, node))
     else:
         raise NotImplementedError
 
@@ -508,7 +508,7 @@ def a_star(env, goal_info, constraints, aid, arg, earliest=0, latest=float('inf'
                 if paths is not None and arg.order >= 4:
                     child.collision += count_collisions(child, aid, paths, heights, t2hid, block_actions, ignore_goals)
                 key = (child.stage, child.x, child.y, child.g)
-                val = (child.collision, child.in_world if arg.order == 5 else child.fuel)
+                val = (child.collision, child.in_world, child.fuel)
                 # New node, fewer collisions, or less fuel
                 if key not in closed_list or closed_list[key] > val:
                     gen += 1

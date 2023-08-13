@@ -18,6 +18,7 @@ Heuristic mode:
     1: # of plan blocks not placed + # of scaffold blocks + 2 * sum (goal value)
 Order mode:
     0: f -> h -> generation order
+    1: f -> h -> goal added -> gen
 '''
 
 
@@ -27,17 +28,10 @@ def heuristic(env, height, mode=1, new_info=None):
     Calculate heuristic value for a given height map and a goal map
     Mode 0: # of plan blocks not placed + # of scaffold blocks
     Mode 1: # of plan blocks not placed + # of scaffold blocks + 2 * sum (goal value)
-    Notes:
-        Mode 1 and 2 only used for initial state
     """
     if mode == 0:
         return np.abs(height - env.goal).sum()
     elif mode == 1:
-        # 1.0: only consider support at neighboring level (1-support)
-        # return np.abs(height - env.goal).sum() + 2 * env.get_goal_val_nb(height).sum()
-        # 1.1: consider support at all levels (d-support)
-        # return np.abs(height - env.goal).sum() + 2 * env.get_goal_val(height).sum()
-        # 1.2: consider d-support, and use goal groupings
         if new_info is None:
             return np.abs(height - env.goal).sum() + 2 * env.get_goal_val_group(height)
         else:
@@ -94,42 +88,6 @@ def execute(height, loc, add):
     else:
         height[loc] -= 1
     return height
-
-
-'''Symmetry detection'''
-def status(env, height, world, valid, h_val):
-    """"""
-    block = world[0]
-    goal_added = world[1]
-    '''Goal blocks'''
-    n_goal_added = goal_added.sum()
-    goal_above = env.goal > height
-    n_goal_addable = (goal_above & valid[1]).sum()
-    n_goal_reachable = (goal_above & valid[0]).sum()
-
-    '''Scaffold blocks'''
-    scaffold_added = world - goal_added
-    n_scaffold_added = scaffold_added.sum()
-    scaffold_above = (env.shadow_height > height) & np.logical_not(goal_above)
-    n_scaffold_addable = (scaffold_above & valid[1]).sum()
-    scaffold_below = height > env.goal
-    n_scaffold_removable = (scaffold_below & valid[2]).sum()
-    scaffold = scaffold_above | scaffold_below
-    n_scaffold_reachable = (scaffold & valid[0]).sum()
-
-    '''Values'''
-    v_shadow_scaffold = (scaffold_added * env.shadow_val).sum()
-    v_shadow_goal = (goal_added * env.shadow_val).sum()
-    v_light_scaffold = (scaffold_added * env.light_val).sum()
-    v_light_goal = (goal_added * env.light_val).sum()
-
-    return (n_goal_added, n_scaffold_added, n_goal_addable, n_goal_reachable, n_scaffold_addable, n_scaffold_removable,
-            n_scaffold_reachable, h_val, v_shadow_scaffold, v_light_scaffold)
-
-def detect_symmetry(env, closed_list, g, height, world, valid, h):
-    key = status(env, height, world, valid, h)
-    duplicate = key in closed_list and g >= closed_list[key]
-    return duplicate, key
 
 
 '''Planning'''
