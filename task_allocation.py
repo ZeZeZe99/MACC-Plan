@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
-from path_finding import distance2border, distance2neighbor, movable_neighbor, heuristic
+from path_finding_2d import distance2border, distance2neighbor, movable_neighbor, heuristic
 
 """
 Task selection methods
@@ -158,14 +158,13 @@ def preprocess_tasks(tasks, info, env):
             for (nx, ny) in env.valid_neighbor[gx, gy]:
                 nzs = loc2height[(nx, ny)]
                 if lv in nzs:
-                    # g2neighbor[(gx, gy, lv)].add((nx, ny, lv))
                     g2neighbor[(gx, gy, lv)].add((nx, ny))
             assert len(g2neighbor[(gx, gy, lv)]) > 0
     '''Pre-compute distance heuristic'''
     info['d2border'] = distance2border(env, loc2height)
     info['d2neighbor'] = distance2neighbor(env, loc2height, g2neighbor)
-    info['loc2height'] = loc2height
-    info['g2neighbor'] = g2neighbor
+    info['loc_height'] = loc2height
+    info['goal_work_loc'] = g2neighbor
     info['movable'] = movable_neighbor(env, loc2height)
 
 def postprocess_tasks(info):

@@ -1,6 +1,6 @@
 import argparse
 
-m = 3
+m = 6
 
 teleport = True
 heu = 2
@@ -60,13 +60,18 @@ def process_config():
     arg = get_parser()
     arg = arg.parse_args()
 
+    # if arg.resolve == 3:
+    #     arg.priority = {'edge-block': 0, 'agent-block': 0, 'move-height': 0, 'block-height': 0, 'vertex': 1, 'edge': 1}
+    # elif arg.resolve == 4:
+    #     arg.priority = {'edge-block': 0, 'agent-block': 0, 'move-height': 1, 'block-height': 1, 'vertex': 2, 'edge': 2}
+    # elif arg.resolve == 5:
+    #     arg.priority = {'edge-block': 1, 'agent-block': 1, 'move-height': 0, 'block-height': 0, 'vertex': 2, 'edge': 2}
+    # else:
+    #     arg.priority = {'edge-block': 0, 'agent-block': 0, 'move-height': 0, 'block-height': 0, 'vertex': 0, 'edge': 0}
     if arg.resolve == 3:
-        arg.priority = {'edge-block': 0, 'agent-block': 0, 'move-height': 0, 'block-height': 0, 'vertex': 1, 'edge': 1}
+        arg.priority = {'prior-height': 0, 'edge-block': 0, 'agent-block': 0, 'height': 0, 'vertex': 1, 'edge': 1}
     elif arg.resolve == 4:
-        arg.priority = {'edge-block': 0, 'agent-block': 0, 'move-height': 1, 'block-height': 1, 'vertex': 2, 'edge': 2}
-    elif arg.resolve == 5:
-        arg.priority = {'edge-block': 1, 'agent-block': 1, 'move-height': 0, 'block-height': 0, 'vertex': 2, 'edge': 2}
+        arg.priority = {'prior-height': 0, 'edge-block': 1, 'agent-block': 1, 'height': 1, 'vertex': 2, 'edge': 2}
     else:
-        arg.priority = {'edge-block': 0, 'agent-block': 0, 'move-height': 0, 'block-height': 0, 'vertex': 0, 'edge': 0}
-
+        arg.priority = {'prior-height': 0, 'edge-block': 0, 'agent-block': 0, 'height': 0, 'vertex': 0, 'edge': 0}
     return arg

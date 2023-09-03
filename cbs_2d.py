@@ -1,8 +1,7 @@
 import heapq
 from copy import deepcopy
-import numpy as np
 
-from path_finding import a_star, construct_heights
+from path_finding_2d import a_star, construct_heights
 
 """
 CBS to handle construction tasks
@@ -64,6 +63,8 @@ def insert_stays(goal_info, paths, times, goal=None):
         while lv in goal_info['lv_tasks']:
             goals = goal_info['lv_tasks'][lv]
             for g in goals:
+                if g not in goal_info['pred']:
+                    continue
                 gid = goal_info['id'][g]
                 t_g = times[gid]
                 pred = goal_info['pred'][g]
@@ -81,6 +82,8 @@ def insert_stays(goal_info, paths, times, goal=None):
             for g in affected_goals:
                 gid = goal_info['id'][g]
                 t_g = times[gid]
+                if g not in goal_info['succ']:
+                    continue
                 for succ in goal_info['succ'][g]:
                     sid = goal_info['id'][succ]
                     t_s = times[sid]
@@ -93,29 +96,39 @@ def insert_stays(goal_info, paths, times, goal=None):
             affected_goals = next_affected_goals
     return paths, times
 
-def extend_paths(paths, window):
+def extend_paths(paths, window, needs_replan):
     """Extend paths to a fixed length by appending stay actions"""
-    for path in paths:
-        pos = (path[-1][0], 'move')
-        path += [pos] * (window - len(path))
+    for i, path in enumerate(paths):
+        if needs_replan[i]:
+            pos = (path[-1][0], 'move')
+            path += [pos] * (window - len(path))
 
 
 '''Conflict handling'''
-def detect_all_conflicts(height, paths, block_actions, detect_mode, priority):
+def detect_all_conflicts(info, heights, paths, block_actions, detect_mode, priority):
     """Detect conflicts between all pairs of paths"""
-    heights, t2hid = construct_heights(height, block_actions)
+    heights = construct_heights(heights, block_actions, info)
     conflicts = []
     for i in range(len(paths)):
+        if not info['needs_replan'][i]:
+            continue
         for j in range(i + 1, len(paths)):
-            c = detect_conflict(heights, t2hid, paths[i], paths[j], block_actions[i], block_actions[j], detect_mode)
+            if not info['needs_replan'][j]:
+                continue
+            c = detect_conflict(heights, paths[i], paths[j], block_actions[i], block_actions[j], detect_mode)
             if c:
                 c['a1'] = i
                 c['a2'] = j
                 c['priority'] = priority[c['type']]
                 conflicts.append(c)
+        c = detect_height_conflict(heights, paths[i], block_actions, i, info['start'])
+        if c:
+            c['a1'] = i
+            c['priority'] = priority[c['type']]
+            conflicts.append(c)
     return conflicts
 
-def detect_conflict(heights, t2hid, path1, path2, block_action1, block_action2, mode):
+def detect_conflict(heights, path1, path2, block_action1, block_action2, mode):
     """
     Detect conflicts between two paths
     Detect order
@@ -133,7 +146,7 @@ def detect_conflict(heights, t2hid, path1, path2, block_action1, block_action2, 
 
         ploc1, ploc2 = path1[0][0][:2], path2[0][0][:2]
         for t in range(1, len(path1)):
-            height = heights[t2hid[t]] if t in t2hid else heights[-1]
+            height = heights[t] if t < heights.shape[0] else heights[-1]
             loc1, loc2 = path1[t][0][:2], path2[t][0][:2]
 
             if r == 0:
@@ -162,12 +175,18 @@ def detect_conflict(heights, t2hid, path1, path2, block_action1, block_action2, 
                 '''Move height conflict: a1 moves from A to B, B is a2's goal location, with height difference > 1'''
                 h1, h2 = height[loc1], height[loc2]
                 ph1, ph2 = height[ploc1], height[ploc2]
+                # TODO: do we need this?
+                # if gloc1 == ploc2 and ((ph2 < h2 - 1 and lv1 == ph2 + 1) or (ph2 > h2 + 1 and lv1 == ph2 - 2)):
+                #     return {'type': 'move-height', 'time': t-1, 'loc': (ploc2, loc2), 'block': 1, 'tb': t1, 'rt': min(t-1, t1)}
+                # if gloc2 == ploc1 and ((ph1 < h1 - 1 and lv2 == ph1 + 1) or (ph1 > h1 + 1 and lv2 == ph1 - 2)):
+                #     return {'type': 'move-height', 'time': t-1, 'loc': (ploc1, loc1), 'block': 2, 'tb': t2, 'rt': min(t-1, t2)}
                 if gloc1 == loc2 and ((ph2 < h2 - 1 and lv1 == ph2 + 1) or (ph2 > h2 + 1 and lv1 == ph2 - 2)):
                     return {'type': 'move-height', 'time': t, 'loc': (ploc2, loc2), 'block': 1, 'tb': t1, 'rt': min(t, t1)}
                 if gloc2 == loc1 and ((ph1 < h1 - 1 and lv2 == ph1 + 1) or (ph1 > h1 + 1 and lv2 == ph1 - 2)):
                     return {'type': 'move-height', 'time': t, 'loc': (ploc1, loc1), 'block': 2, 'tb': t2, 'rt': min(t, t2)}
 
                 '''Block height conflict: a1 performs block action from A to B, A = g2, while height is incorrect'''
+                # Assumption: block height at B is correct
                 if t == t1 and loc1 == gloc2 and lv1 != h1 and (1 >= lv1 - lv2 >= 0):
                     return {'type': 'block-height', 'time': t, 'loc': loc1, 'curr': 1, 't2': t2, 'rt': min(t1, t2)}
                 if t == t2 and loc2 == gloc1 and lv2 != h2 and (1 >= lv2 - lv1 >= 0):
@@ -187,9 +206,42 @@ def detect_conflict(heights, t2hid, path1, path2, block_action1, block_action2, 
                     '''Block-block conflict: ignored, won't happen'''
 
             ploc1, ploc2 = loc1, loc2
-
     return None
 
+def detect_height_conflict(heights, path, block_actions, i, start):
+    """Detect height conflicts with fixed paths"""
+    tb, (add, gx, gy, lv, _) = block_actions[i]
+    ploc = path[start][0][:2]
+    for t in range(start + 1, len(path)):
+        height = heights[t] if t < heights.shape[0] else heights[-1]
+        loc = path[t][0][:2]
+        h, ph = height[loc], height[ploc]
+        if abs(h - ph) > 1:
+            fixed_con = True
+            for t2, (add2, x2, y2, lv2, _) in block_actions:
+                if gx == x2 and gy == y2:
+                    continue
+                if (x2, y2) != loc:
+                    continue
+                if (ph < h - 1 and lv2 == ph + 1) or (ph > h + 1 and lv2 == ph - 2):
+                    fixed_con = False
+                    break
+            if fixed_con:
+                return {'type': 'move-height-fixed', 'time': t, 'loc': (ploc, loc), 'rt': t}
+        if t == tb and h != lv:
+            fixed_con = True
+            for t2, (add2, x2, y2, lv2, _) in block_actions:
+                if gx == x2 and gy == y2:
+                    continue
+                if (x2, y2) != loc:
+                    continue
+                if 1 >= lv2 - lv >= 0:
+                    fixed_con = False
+                    break
+            if fixed_con:
+                return {'type': 'block-height-fixed', 'time': t, 'loc': loc, 'rt': t}
+        ploc = loc
+    return None
 
 def resolve_conflict(conflict):
     """
@@ -334,25 +386,30 @@ def push_node(open_list, node):
     """Push a node into the open list. Order = cost, # conflicts, gen_id"""
     heapq.heappush(open_list, (node.cost, len(node.conflicts), node.gen_id, node))
 
-def cbs(env, goal_info, arg, last_round):
+def cbs(env, info, arg, last_round, heights=None):
     assert arg.detect <= 1 and arg.resolve <= 5
-    height = env.height
-    num = len(goal_info['goals'])
+    # height = env.height
+    num = len(info['goals'])
     limit = env.w * env.w
 
     '''Plan initial single-agent paths'''
     paths, times = [], []
     for i in range(num):
-        path, t = a_star(env, goal_info, [], i, arg)
-        paths.append(path)
-        times.append(t)
-    paths, times = insert_stays(goal_info, paths, times)
+        if info['needs_replan'][i]:
+            path, t = a_star(env, info, heights, [], i, arg, earliest=info['earliest'])
+            path = info['planned_paths'][i] + path[1:]
+            paths.append(path)
+            times.append(t + info['available_t'][i])
+        else:
+            paths.append([])
+            times.append(0)
+    paths, times = insert_stays(info, paths, times)
     window = max([len(p) for p in paths])
-    extend_paths(paths, window)
-    block_actions = [(times[i], goal_info['goals'][i]) for i in range(num)]
+    extend_paths(paths, window, info['needs_replan'])
+    block_actions = [(times[i], info['goals'][i]) for i in range(num)]
     root = Node(paths, times, block_actions, set(), 0)
     root.cost = compute_cost(paths, block_actions, arg.cost, last_round)
-    root.conflicts = detect_all_conflicts(height, paths, block_actions, arg.detect, arg.priority)
+    root.conflicts = detect_all_conflicts(info, heights, paths, block_actions, arg.detect, arg.priority)
 
     open_list = []
     closed_list = dict()
@@ -381,26 +438,28 @@ def cbs(env, goal_info, arg, last_round):
             child = Node(deepcopy(node.paths), node.times.copy(), node.block_actions,
                          node.constraints.copy().union(new_cons), generate + 1)
             aid = cons[0][1]
-            goal = goal_info['goals'][aid]
-            pred = goal_info['pred'][goal]
-            earliest = 0 if len(pred) == 0 else max(node.times[goal_info['id'][p]] for p in pred) + 1
-            path, t = a_star(env, goal_info, child.constraints, aid, arg, earliest=earliest, latest=limit, paths=child.paths, block_actions=child.block_actions)
+            goal = info['goals'][aid]
+            if goal in info['pred']:
+                pred = info['pred'][goal]
+                earliest = 0 if len(pred) == 0 else max(node.times[info['id'][p]] for p in pred) + 1
+            else:
+                earliest = 0
+            path, t = a_star(env, info, heights, child.constraints, aid, arg, earliest=earliest, latest=limit, paths=child.paths, block_actions=child.block_actions)
             if path:
-                child.paths[aid] = path
+                child.paths[aid] = info['planned_paths'][aid] + path[1:]
                 child.times[aid] = t
-                child.paths, child.times = insert_stays(goal_info, child.paths, child.times, goal_info['goals'][aid])
+                child.paths, child.times = insert_stays(info, child.paths, child.times, info['goals'][aid])
                 window = max([len(p) for p in child.paths])
-                extend_paths(child.paths, window)
-                child.block_actions = [(child.times[i], goal_info['goals'][i]) for i in range(num)]
+                extend_paths(child.paths, window, info['needs_replan'])
+                child.block_actions = [(child.times[i], info['goals'][i]) for i in range(num)]
                 child.cost = compute_cost(child.paths, child.block_actions, arg.cost, last_round)
-                child.conflicts = detect_all_conflicts(height, child.paths, child.block_actions, arg.detect, arg.priority)
+                child.conflicts = detect_all_conflicts(info, heights, child.paths, child.block_actions, arg.detect, arg.priority)
 
                 # TODO: duplicate detection
                 generate += 1
                 push_node(open_list, child)
 
     print(f'No solution found. Generate: {generate}, Expand: {expand}')
-
 
 class Node:
     def __init__(self, paths, times, block_actions, constraints, gen_id):

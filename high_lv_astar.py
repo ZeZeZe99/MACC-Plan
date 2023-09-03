@@ -122,7 +122,6 @@ def high_lv_plan(env, arg):
     """
     open_list = []
     closed_list = dict()  # key: (height, g), value: Node
-    closed_stat = dict()
 
     valid = env.valid_bfs_map(env.height, degree=arg.valid)
     root_info = init_scaffold_info(env, env.height)
@@ -132,9 +131,6 @@ def high_lv_plan(env, arg):
     gen = expand = invalid = dup = dup2 = 0
 
     closed_list[root.height.tobytes()] = 0
-    if arg.symmetry == 1:
-        stat = status(env, env.height, root_info['world'], valid, root_h)
-        closed_stat[stat] = 0
 
     while len(open_list) > 0:
         node = heapq.heappop(open_list)[-1]
@@ -189,14 +185,6 @@ def high_lv_plan(env, arg):
                     continue
                 new_h = heuristic(env, new_height, mode=arg.high_heu, new_info=new_info)
 
-                '''Symmetry detection'''
-                if arg.symmetry == 1:
-                    duplicate, key = detect_symmetry(env, closed_stat, new_g, new_height, new_world, new_valid, new_h)
-                    if duplicate:
-                        dup2 += 1
-                        continue
-                    closed_stat[key] = new_g
-
                 '''Generate child node'''
                 gen += 1
                 action = (int(add), x, y, z)
@@ -240,7 +228,6 @@ if __name__ == '__main__':
     env.set_shadow(val=True)
     env.set_distance_map()
     env.set_support_map()
-    env.set_light()
 
     profiler = cProfile.Profile()
     profiler.enable()

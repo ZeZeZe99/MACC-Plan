@@ -2,35 +2,6 @@ import heapq
 from collections import deque
 import numpy as np
 
-"""
-Low level A* search to plan a single agent path in 3D space to
-    1) finish goal
-    2) return to parking location
-
-A* ordering mode
-    0: order = -stage, f, h 
-        Favors reaching later stages earlier, similar to multi-step A* with back-track
-        h = cost to goal of current stage
-    1: order = f, h
-        Favors parking earlier, similar to multi-label A*
-        h = cost to goal then back to park location
-    2: order = f, h, h2g, (fuel)
-        Similar to 1, favors finishing goal earlier (2nd)
-        h = cost to goal then back to park location, h2g = cost to goal
-    3: order = f, h2g, h, (fuel)
-        Favors finishing goal earlier (1st), then parking earlier (2nd)
-    4: order = f, collision, h, h2g, (fuel)
-        Favors fewer collisions (1st), parking earlier (2nd), finishing goal earlier (3rd)
-        collision = # collisions with existing paths
-    5: order = f, collision, h, h2g, in_world, (fuel)
-        Similar to 4, favors less in-world actions (4th)
-    Extra: favors less fuel consumption (non-stay actions)
-
-Heuristic mode
-    0: Manhattan distance to goal of current stage
-    1: Manhattan distance to the end goal
-    2: Precomputed distance to the end goal
-"""
 
 
 '''Heuristic'''
@@ -67,7 +38,7 @@ def distance2neighbor(env, loc2height, goal2neighbor):
     d2neighbor = dict()
     for g, nbs in goal2neighbor.items():
         gx, gy, lv = g
-        for (nx, ny, nz) in nbs:
+        for nx, ny, nz in nbs:
             if (nx, ny, lv) in d2neighbor:
                 continue
             distance = dict()
@@ -167,12 +138,12 @@ def heuristic(env, goal_info, stage, x, y, z, gx, gy, lv, mode, teleport):
                 if x != -1:
                     d1 += goal_info['d2border'].get((x, y, z), 1000) + 1
                 d2 = 1000
-                for (nx, ny, nz) in goal_info['g2neighbor'][(gx, gy, lv)]:
+                for (nx, ny, nz) in goal_info['goal_work_loc'][(gx, gy, lv)]:
                     d2 = min(d2, goal_info['d2border'].get((nx, ny, nz), 1000))
                 h = d1 + d2 * 2 + 2
                 hg = d1 + d2 + 1
             else:
-                for (nx, ny, nz) in goal_info['g2neighbor'][(gx, gy, lv)]:
+                for (nx, ny, nz) in goal_info['goal_work_loc'][(gx, gy, lv)]:
                     d2nbr = goal_info['d2neighbor'].get((nx, ny, nz))
                     if d2nbr is None:
                         continue
@@ -188,12 +159,12 @@ def heuristic(env, goal_info, stage, x, y, z, gx, gy, lv, mode, teleport):
             if teleport:
                 if x == -1:
                     d1 = 1000
-                    for (nx, ny, nz) in goal_info['g2neighbor'][(gx, gy, lv)]:
+                    for (nx, ny, nz) in goal_info['goal_work_loc'][(gx, gy, lv)]:
                         d1 = min(d1, goal_info['d2border'].get((nx, ny, nz), 1000))
                     h = 2 * d1 + 3
                     hg = d1 + 2
                 else:
-                    for (nx, ny, nz) in goal_info['g2neighbor'][(gx, gy, lv)]:
+                    for (nx, ny, nz) in goal_info['goal_work_loc'][(gx, gy, lv)]:
                         d2nbr = goal_info['d2neighbor'].get((nx, ny, nz))
                         if d2nbr is None:
                             continue
@@ -203,7 +174,7 @@ def heuristic(env, goal_info, stage, x, y, z, gx, gy, lv, mode, teleport):
                             h = d1 + d2 + 2
                             hg = d1 + 1
             else:
-                for (nx, ny, nz) in goal_info['g2neighbor'][(gx, gy, lv)]:
+                for (nx, ny, nz) in goal_info['goal_work_loc'][(gx, gy, lv)]:
                     d2nbr = goal_info['d2neighbor'].get((nx, ny, nz))
                     if d2nbr is None:
                         continue
@@ -222,12 +193,17 @@ def heuristic(env, goal_info, stage, x, y, z, gx, gy, lv, mode, teleport):
 
 
 '''Action validation'''
-def goal_ready(goal, x, y, z):
-    """Check if the goal (block) action is ready to be performed"""
-    add, gx, gy, lv, _ = goal
-    if manhattan(x, y, gx, gy) != 1:  # Agent should be next to goal in x-y plane
-        return False
-    return z == lv
+def available_action(env, loc2height):
+    actions = dict()
+    for x, y in env.valid_loc:
+        for z in loc2height[x, y]:
+            actions[x, y, z] = [(x, y, z)]
+            for nx, ny in env.valid_neighbor[x, y]:
+                for nz in [z - 1, z, z + 1]:
+                    if nz in loc2height[nx, ny]:
+                        actions[x, y, z].append((nx, ny, nz))
+    actions[-1, -1, -1] = []
+    return actions
 
 
 '''Single agent path finding'''
@@ -249,36 +225,41 @@ def filter_constraints(constraints, aid):
                 max_step = max(max_step, time)
     return cons, max_step
 
-def constrained(x1, y1, x2, y2, t, action, constraints):
-    """Check if the action is constrained in 2D space. Constraint = (type, agent, time, loc, range)"""
+def constrained(info, constraints, t, loc1, loc2, z, action, gloc):
+    """Check if the action is constrained. Constraint = (type, agent, time, loc)"""
+    '''Priority constraints (path to avoid from already planned paths)'''
+    if t in info['prior_cons']:
+        if loc2 in info['prior_cons'][t][0]:
+            return True
+        if (loc1, loc2) in info['prior_cons'][t][0]:
+            return True
+        if action == 'goal' and (gloc in info['prior_cons'][t][1] or gloc in info['prior_cons'][t - 1][1]):
+            return True
+    '''Constraints in current round'''
     if t in constraints:
         for c in constraints[t]:
             # Vertex constraint
-            if c[0] == 'vertex' and (x2, y2) == c[3]:
+            if c[0] == 'vertex' and loc2 == c[3]:
+                return True
+            # 3D vertex constraint
+            if c[0] == 'vertex3d' and (loc2, z) == c[3]:
                 return True
             # Edge constraint
             if action == 'move':
-                if c[0] == 'edge' and ((x1, y1), (x2, y2)) == c[3]:
+                if c[0] == 'edge' and (loc1, loc2) == c[3]:
                     return True
             # Block constraint
             if action == 'goal' and c[0] == 'block':
                 return True
-    return False
-
-def constrained_3d(x2, y2, z2, t, constraints):
-    """Check if the action is constrained in 3D space. Constraint = (type, agent, time, loc, range)"""
-    if t in constraints:
-        for c in constraints[t]:
-            if c[0] == 'lv-vertex' and ((x2, y2), z2) == c[3]:
-                return True
     for c in constraints['range']:
-        if t >= c[2] and ((x2, y2), z2) == c[3]:
-            return True
+        if c[2] <= t:
+            if c[0] == 'range-vertex3d' and (loc2, z) == c[3]:
+                return True
     return False
 
-def construct_heights(height, block_actions, ignore_goals=None):
+def construct_heights(info, heights, block_actions, ignore_goals=None):
     """
-    Construct the height map sequence from block actions, plus a mapping from t to height map id, for conflict detection
+    Construct the height map sequence by times, for conflict detection
     Block action: (t, (add, x, y, lv, gid))
     Assume block action at t will change the map at t+1
     When goal to ignore is given, ignore it and all its successors
@@ -287,29 +268,24 @@ def construct_heights(height, block_actions, ignore_goals=None):
         ignore_goals = set()
     block_actions = block_actions.copy()
     block_actions.sort()  # Sort by time
-    heights = [height]  # Height map sequence, include initial one
-    t2hid = {0: 0}
-    prev_t, hid = 0, 0
 
-    for t, g in block_actions:  # t will always start above 0
+    max_t = block_actions[-1][0] + 1
+    if max_t > heights.shape[0] + 1:  # Pad height map
+        new_heights = np.tile(heights[-1], (max_t - heights.shape[0] + 1, 1, 1))
+        new_heights = np.concatenate([heights, new_heights], axis=0)
+    else:
+        new_heights = heights.copy()
+
+    for t, g in block_actions:  # t will always start >= 0
         add, x, y, lv, _ = g
         if g in ignore_goals:  # Skip ignored goals
             continue
-        if t < 0:  # Skip dummy actions
+        if add < 0:  # Skip dummy actions
             continue
-        if t > prev_t:
-            hid += 1
-            heights.append(heights[-1].copy())
-        heights[-1][x, y] += 1 if add else -1  # Update height map
-        if t > prev_t:  # Update mapping from t to height map id
-            for i in range(prev_t, t):
-                t2hid[i + 1] = hid - 1
-            t2hid[t + 1] = hid
-        prev_t = t
-    heights = np.stack(heights, axis=0)
-    return heights, t2hid
+        new_heights[t + 1:, x, y] += 1 if add == 1 else -1
+    return new_heights
 
-def count_collisions(node, aid, paths, heights, t2hid, block_actions, ignore_goals):
+def count_collisions(node, aid, paths, heights, block_actions, ignore_goals, needs_replan):
     """Count the number of collisions with other paths"""
     collision = 0
     x, y, z = node.x, node.y, node.z
@@ -319,10 +295,12 @@ def count_collisions(node, aid, paths, heights, t2hid, block_actions, ignore_goa
     if ignore_goals is None:
         ignore_goals = set()
     time = node.g
-    if time >= len(paths[0]):
-        time = len(paths[0]) - 1
     for i in range(len(paths)):
         if i == aid:  # Skip own path
+            continue
+        if not needs_replan[i]:  # Skip paths that don't need to replan
+            continue
+        if time >= len(paths[i]):  # Skip if agent i returns home
             continue
         x2, y2, z2 = paths[i][time][0]
         px2, py2, _ = paths[i][time - 1][0]
@@ -339,7 +317,7 @@ def count_collisions(node, aid, paths, heights, t2hid, block_actions, ignore_goa
         if t == time and ((x, y) == (gx, gy) or (px, py) == (gx, gy)):  # Agent-block collision
             collision += 1
     i = 1 if node.stage == 2 else 0
-    height = heights[i, t2hid[time]] if time in t2hid else heights[i, -1]
+    height = heights[i, time] if time < heights.shape[1] else heights[i, -1]
     if z != height[x, y]:  # Height collision
         collision += 1
     return collision
@@ -372,7 +350,7 @@ def push_node(open_list, node, gen, mode):
     else:
         raise NotImplementedError
 
-def a_star(env, goal_info, constraints, aid, arg, earliest=0, latest=float('inf'), paths=None, block_actions=None):
+def a_star(env, info, heights, constraints, aid, arg, earliest=0, latest=float('inf'), paths=None, block_actions=None):
     """
     A* search for a single-agent path in 3D space: finish a goal + return to border
     Node stages:
@@ -380,30 +358,30 @@ def a_star(env, goal_info, constraints, aid, arg, earliest=0, latest=float('inf'
         1: finish goal
         2: move to border
     """
-    goal = goal_info['goals'][aid]
+    goal = info['goals'][aid]
     add, gx, gy, lv, _ = goal
-    ax, ay, az = goal_info['pos'][aid]
-    stage = goal_info['stage'][aid]
+    ax, ay, az = info['pos'][aid]
+    stage = info['stage'][aid]
     cons, max_con_step = filter_constraints(constraints, aid)
     heu, teleport = arg.heu, arg.teleport
 
     if paths is not None and arg.order >= 4:
-        if goal[0] == -1:
+        if goal[0] == -1 or goal not in info['all_succ']:
             ignore_goals = None
         else:
-            ignore_goals = goal_info['all_succ'][goal].copy()
+            ignore_goals = info['all_succ'][goal].copy()
             ignore_goals.add(goal)
-        heights, t2hid = construct_heights(env.height, block_actions, ignore_goals=ignore_goals)
-        heights = np.tile(heights, (2, 1, 1, 1))
-        heights[1, :, gx, gy] += 1 if add else -1
+        new_heights = construct_heights(info, heights, block_actions, ignore_goals=ignore_goals)
+        new_heights = np.tile(new_heights, (2, 1, 1, 1))
+        new_heights[1, :, gx, gy] += 1 if add else -1
     else:
-        heights, t2hid, ignore_goals = None, None, None
+        new_heights, ignore_goals = heights, None
 
     open_list = []
     closed_list = dict()
     gen = 0
-    h_val, h2g = heuristic(env, goal_info, stage, ax, ay, az, gx, gy, lv, heu, teleport)
-    root = Node(None, 0, h_val, h2g, ax, ay, az, stage)
+    h_val, h2g = heuristic(env, info, stage, ax, ay, az, gx, gy, lv, heu, teleport)
+    root = Node(None, info['available_t'][aid], h_val, h2g, ax, ay, az, stage)
     push_node(open_list, root, gen, arg.order)
 
     while len(open_list) > 0:
@@ -421,52 +399,48 @@ def a_star(env, goal_info, constraints, aid, arg, earliest=0, latest=float('inf'
         '''Stage 0: try to interact with depo'''
         if stage == 0:
             if arg.teleport and x == -1:
-                h_val, h2g = heuristic(env, goal_info, 1, x, y, z, gx, gy, lv, heu, teleport)
+                h_val, h2g = heuristic(env, info, 1, x, y, z, gx, gy, lv, heu, teleport)
                 child = Node(node, g + 1, h_val, h2g, x, y, z, 1, action='depo')
                 children.append(child)
-            elif not arg.teleport and (x, y) in env.border_loc and not constrained(x, y, x, y, g + 1, 'depo', cons):
-                h_val, h2g = heuristic(env, goal_info, 1, x, y, z, gx, gy, lv, heu, teleport)
+            elif not arg.teleport and (x, y) in env.border_loc and \
+                    not constrained(info, cons, g + 1, (x, y), (x, y), z, 'depo', (gx, gy)):
+                h_val, h2g = heuristic(env, info, 1, x, y, z, gx, gy, lv, heu, teleport)
                 child = Node(node, g + 1, h_val, h2g, x, y, z, 1, action='depo')
                 children.append(child)
 
         '''Stage 1: try to finish goal'''
-        if g + 1 >= earliest and stage == 1 and goal_ready(goal, x, y, z) and \
-                not constrained(x, y, x, y, g + 1, 'goal', cons) and not constrained_3d(x, y, z, g + 1, cons):
-            h_val, h2g = heuristic(env, goal_info, 2, x, y, z, gx, gy, lv, heu, teleport)
+        if g + 1 >= earliest and stage == 1 and (x, y, z) in info['goal_work_loc'][(gx, gy, lv)] and \
+                not constrained(info, cons, g + 1, (x, y), (x, y), z, 'goal', (gx, gy)):
+            h_val, h2g = heuristic(env, info, 2, x, y, z, gx, gy, lv, heu, teleport)
             child = Node(node, g + 1, h_val, h2g, x, y, z, 2, action='goal')
             children.append(child)
 
         '''Move & stay actions'''
-        for (x2, y2) in env.valid_next_loc[(x, y)]:
-            if constrained(x, y, x2, y2, g + 1, 'move', cons):
+        t = min(g + 1, heights.shape[0])
+        for x2, y2, z2 in info['actions'][t][(x, y, z)]:
+            if constrained(info, cons, g + 1, (x, y), (x2, y2), z2, 'move', (gx, gy)):
                 continue
-            zs = goal_info['loc2height'][(x2, y2)]
-            for z2 in zs:
-                if x == x2 and y == y2 and z != z2:  # Skip vertical move
+            # Skip level inaccessible due to self goal action being finished (assume no future goals at x, y)
+            if x2 == gx and y2 == gy:
+                if stage == 2 and ((add and z2 <= lv) or (not add and z2 > lv)):
                     continue
-                if abs(z - z2) > 1 or constrained_3d(x2, y2, z2, g + 1, cons):  # Skip move with height difference > 1
-                    continue
-                # Skip level inaccessible based on own goal action, assume no 2 goals for the same block
-                if x2 == gx and y2 == gy:
-                    if stage == 2 and ((add and z2 <= lv) or (not add and z2 >= lv + 1)):
-                        continue
-                    if stage != 2 and ((add and z2 >= lv + 1) or (not add and z2 <= lv)):
-                        continue
-                h_val, h2g = heuristic(env, goal_info, stage, x2, y2, z2, gx, gy, lv, heu, teleport)
-                child = Node(node, g + 1, h_val, h2g, x2, y2, z2, stage)
-                children.append(child)
+                # if stage != 2 and ((add and z2 >= lv + 1) or (not add and z2 <= lv)):
+                #     continue
+            h_val, h2g = heuristic(env, info, stage, x2, y2, z2, gx, gy, lv, heu, teleport)
+            child = Node(node, g + 1, h_val, h2g, x2, y2, z2, stage)
+            children.append(child)
 
         '''Teleport: leave world & enter world'''
         if arg.teleport:
             if x == -1 or (x, y) in env.border_loc:
-                h_val, h2g = heuristic(env, goal_info, stage, -1, -1, -1, gx, gy, lv, heu, teleport)
+                h_val, h2g = heuristic(env, info, stage, -1, -1, -1, gx, gy, lv, heu, teleport)
                 child = Node(node, g + 1, h_val, h2g, -1, -1, -1, stage)
                 children.append(child)
             if x == -1:
                 for (x2, y2) in env.border_loc:
-                    if constrained(x, y, x2, y2, g + 1, 'move', cons):
+                    if constrained(info, cons, g + 1, (x, y), (x2, y2), 0, 'move', (gx, gy)):
                         continue
-                    h_val, h2g = heuristic(env, goal_info, stage, x2, y2, 0, gx, gy, lv, heu, teleport)
+                    h_val, h2g = heuristic(env, info, stage, x2, y2, 0, gx, gy, lv, heu, teleport)
                     child = Node(node, g + 1, h_val, h2g, x2, y2, 0, stage)
                     children.append(child)
 
@@ -474,9 +448,9 @@ def a_star(env, goal_info, constraints, aid, arg, earliest=0, latest=float('inf'
         for child in children:
             if child.g <= latest:  # Trim nodes with g > limit
                 if paths is not None and arg.order >= 4:
-                    child.collision += count_collisions(child, aid, paths, heights, t2hid, block_actions, ignore_goals)
+                    child.collision += count_collisions(child, aid, paths, new_heights, block_actions, ignore_goals, info['needs_replan'])
                 key = (child.stage, child.x, child.y, child.z, child.g)
-                val = (child.collision, child.in_world if arg.order == 5 else child.fuel)
+                val = (child.collision, child.in_world, child.fuel)
                 # New node, fewer collisions, or less fuel
                 if key not in closed_list or closed_list[key] > val:
                     gen += 1
