@@ -316,8 +316,7 @@ def count_collisions(node, aid, paths, heights, block_actions, ignore_goals, nee
         gx, gy = g[2:4]
         if t == time and ((x, y) == (gx, gy) or (px, py) == (gx, gy)):  # Agent-block collision
             collision += 1
-    i = 1 if node.stage == 2 else 0
-    height = heights[i, time] if time < heights.shape[1] else heights[i, -1]
+    height = heights[time] if time < heights.shape[0] else heights[-1]
     if z != height[x, y]:  # Height collision
         collision += 1
     return collision
@@ -372,8 +371,6 @@ def a_star(env, info, heights, constraints, aid, arg, earliest=0, latest=float('
             ignore_goals = info['all_succ'][goal].copy()
             ignore_goals.add(goal)
         new_heights = construct_heights(info, heights, block_actions, ignore_goals=ignore_goals)
-        new_heights = np.tile(new_heights, (2, 1, 1, 1))
-        new_heights[1, :, gx, gy] += 1 if add else -1
     else:
         new_heights, ignore_goals = heights, None
 
@@ -424,8 +421,8 @@ def a_star(env, info, heights, constraints, aid, arg, earliest=0, latest=float('
             if x2 == gx and y2 == gy:
                 if stage == 2 and ((add and z2 <= lv) or (not add and z2 > lv)):
                     continue
-                # if stage != 2 and ((add and z2 >= lv + 1) or (not add and z2 <= lv)):
-                #     continue
+                if stage < 2 and ((add and z2 > lv) or (not add and z2 <= lv)):
+                    continue
             h_val, h2g = heuristic(env, info, stage, x2, y2, z2, gx, gy, lv, heu, teleport)
             child = Node(node, g + 1, h_val, h2g, x2, y2, z2, stage)
             children.append(child)
